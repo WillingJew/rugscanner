@@ -17,14 +17,19 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
 
 app.use(cors({
-  origin: ['chrome-extension://*', 'http://localhost:3000', process.env.SITE_URL].filter(Boolean),
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (
+      origin.startsWith('chrome-extension://') ||
+      origin.startsWith('http://localhost') ||
+      origin === process.env.SITE_URL
+    ) {
+      return callback(null, true);
+    }
+    callback(null, true);
+  },
   credentials: true
 }));
-
-// Raw body needed for Stripe webhooks
-app.use('/webhook', express.raw({ type: 'application/json' }));
-app.use(express.json());
-app.use(express.static('public'));
 
 // ── AUTH MIDDLEWARE ───────────────────────────────────────────────────────────
 
