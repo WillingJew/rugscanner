@@ -16,21 +16,14 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
 
-app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (
-      origin.startsWith('chrome-extension://') ||
-      origin.startsWith('http://localhost') ||
-      origin === process.env.SITE_URL
-    ) {
-      return callback(null, true);
-    }
-    callback(null, true);
-  },
-  credentials: true
-}));
-
+app.use((req, res, next) => {
+  if (req.originalUrl === '/webhook') {
+    express.raw({ type: 'application/json' })(req, res, next);
+  } else {
+    express.json()(req, res, next);
+  }
+});
+app.use(express.static('public'));
 // ── AUTH MIDDLEWARE ───────────────────────────────────────────────────────────
 
 function requireAuth(req, res, next) {
