@@ -134,6 +134,8 @@ async function getTokenSupply(mintAddress, apiKey) {
     })
   });
   const data = await res.json();
+  console.log('[Helius] getTokenSupply response:', JSON.stringify(data).slice(0, 200));
+  if (data.error) throw new Error(`Helius error: ${data.error.message || JSON.stringify(data.error)}`);
   return data.result?.value?.uiAmount || null;
 }
 
