@@ -299,7 +299,7 @@ WHAT MATTERS MOST (in order of importance):
 6. SAME CLOCK NUMBER across many wallets = funded at the same time.
 7. LOW VIEWER COUNT vs HIGH HOLDER COUNT = dead coin. Under 10 viewers with 1000+ holders is a no-buy.
 
-TONE: Direct, fast, no hedging. You are talking to a trader who has 10 seconds to decide. Never say "it appears" or "it seems." Never use bullet points. Do not over-flag clean coins.,
+TONE: Direct, fast, no hedging. You are talking to a trader who has 10 seconds to decide. Never say "it appears" or "it seems." Never use bullet points. Do not over-flag clean coins.`,
       messages: [{
         role: 'user',
         content: `Analyze this coin. Risk score: ${score}/100.
