@@ -3,6 +3,11 @@
 const HELIUS_API = 'https://mainnet.helius-rpc.com';
 const HELIUS_REST = 'https://api.helius.xyz';
 
+// Helper to build RPC URL with API key
+function rpcUrl(apiKey) {
+  return `${HELIUS_API}/?api-key=${encodeURIComponent(apiKey)}`;
+}
+
 async function getTokenHolders(mintAddress, apiKey) {
   let allAccounts = [];
   let cursor = null;
@@ -20,7 +25,7 @@ async function getTokenHolders(mintAddress, apiKey) {
       }
     };
 
-    const res = await fetch(`${HELIUS_API}/?api-key=${apiKey}`, {
+    const res = await fetch(rpcUrl(apiKey), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -39,7 +44,7 @@ async function getTokenHolders(mintAddress, apiKey) {
 }
 
 async function getWalletSOLBalance(address, apiKey) {
-  const res = await fetch(`${HELIUS_API}/?api-key=${apiKey}`, {
+  const res = await fetch(rpcUrl(apiKey), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -82,7 +87,7 @@ async function getWalletIdentity(address, apiKey) {
 async function getWalletAge(address, apiKey) {
   // Get first transaction timestamp to determine wallet age
   try {
-    const res = await fetch(`${HELIUS_API}/?api-key=${apiKey}`, {
+    const res = await fetch(rpcUrl(apiKey), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -98,7 +103,7 @@ async function getWalletAge(address, apiKey) {
     if (!sigs || sigs.length === 0) return null;
 
     // Get the oldest signature
-    const oldestRes = await fetch(`${HELIUS_API}/?api-key=${apiKey}`, {
+    const oldestRes = await fetch(rpcUrl(apiKey), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -123,7 +128,7 @@ async function getWalletAge(address, apiKey) {
 }
 
 async function getTokenSupply(mintAddress, apiKey) {
-  const res = await fetch(`${HELIUS_API}/?api-key=${apiKey}`, {
+  const res = await fetch(rpcUrl(apiKey), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
