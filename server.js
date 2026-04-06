@@ -423,35 +423,7 @@ function detectRisks(tokenData) {
     }
   }
 
-  // 4. BALANCE UNIFORMITY
-  const withBal = realHolders.filter(h => h.solBalance != null && h.solBalance > 0);
-  if (withBal.length >= 5) {
-    const sorted = [...withBal].sort((a, b) => a.solBalance - b.solBalance);
-    let bestGroup = [];
-    for (let i = 0; i < sorted.length; i++) {
-      const lo = sorted[i].solBalance;
-      const group = sorted.filter(h => h.solBalance - lo <= 0.8);
-      if (group.length > bestGroup.length) bestGroup = group;
-    }
-    if (bestGroup.length >= 5) {
-      const avg = bestGroup.reduce((s, h) => s + h.solBalance, 0) / bestGroup.length;
-      const spread = (Math.max(...bestGroup.map(h => h.solBalance)) - Math.min(...bestGroup.map(h => h.solBalance))).toFixed(2);
-      const totalPct = bestGroup.reduce((s, h) => s + (h.percentage || 0), 0);
-      const ranks = bestGroup.map(h => h.rank).sort((a,b)=>a-b);
-      if (bestGroup.length >= 10) {
-        flag(`${bestGroup.length} wallets share similar SOL balance (~${avg.toFixed(2)} SOL ±${spread})`, 'critical',
-          `Ranks ${ranks[0]}-${ranks[ranks.length-1]}, ${totalPct.toFixed(1)}% total`);
-        rawScore += 30;
-      } else if (bestGroup.length >= 7) {
-        flag(`${bestGroup.length} wallets share similar SOL balance (~${avg.toFixed(2)} SOL)`, 'high',
-          `${totalPct.toFixed(1)}% total`);
-        rawScore += 18;
-      } else {
-        flag(`${bestGroup.length} wallets share similar SOL balance (~${avg.toFixed(2)} SOL)`, 'medium');
-        rawScore += 8;
-      }
-    }
-  }
+  // Balance uniformity check removed — unreliable data source
 
   // 5. NEW WALLETS (wallet age < 7 days)
   const newWallets = realHolders.filter(h => h.walletAgeSeconds != null && h.walletAgeSeconds < 604800);
@@ -504,15 +476,7 @@ function detectRisks(tokenData) {
 
   // Compute stats for UI
   const funderClusters = Object.values(funderGroups).filter(g => g.length >= 2).length;
-  const balanceClusterSize = (() => {
-    const wb = realHolders.filter(h => h.solBalance != null && h.solBalance > 0).sort((a,b) => a.solBalance - b.solBalance);
-    let best = 0;
-    for (let i = 0; i < wb.length; i++) {
-      const g = wb.filter(h => h.solBalance - wb[i].solBalance <= 0.8);
-      if (g.length > best) best = g.length;
-    }
-    return best;
-  })();
+  const balanceClusterSize = 0; // removed
 
   return {
     score: rawScore,
@@ -530,6 +494,34 @@ function detectRisks(tokenData) {
     }
   };
 }
+
+// ── TEST ROUTE ───────────────────────────────────────────────────────────────
+app.post('/scan/test', requireAuth, async (req, res) => {
+  const { ca } = req.body;
+  console.log('[TEST] CA received:', ca);
+  console.log('[TEST] HELIUS_API_KEY present:', !!process.env.HELIUS_API_KEY);
+  console.log('[TEST] HELIUS_API_KEY length:', process.env.HELIUS_API_KEY?.length);
+  
+  try {
+    // Test basic Helius connectivity
+    const testRes = await fetch(`https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'test',
+        method: 'getTokenSupply',
+        params: [ca]
+      })
+    });
+    const testData = await testRes.json();
+    console.log('[TEST] Helius response:', JSON.stringify(testData).slice(0, 300));
+    res.json({ success: true, heliusResponse: testData });
+  } catch (err) {
+    console.error('[TEST] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── SCAN ROUTES ───────────────────────────────────────────────────────────────
 
@@ -562,7 +554,7 @@ app.post('/scan/ai', requireAuth, requirePro, async (req, res) => {
       .map(h => [
         `Rank ${h.rank}:`,
         h.percentage != null ? `${h.percentage.toFixed(1)}%` : '',
-        h.solBalance != null ? `${h.solBalance.toFixed(3)} SOL` : '',
+
         h.funderAddress ? `funded by ${h.funderAddress}` : '',
         h.identity ? `[${h.identity}]` : '',
         h.walletAgeSeconds != null ? `wallet age: ${Math.round(h.walletAgeSeconds/86400)}d` : '',
@@ -576,20 +568,25 @@ app.post('/scan/ai', requireAuth, requirePro, async (req, res) => {
       max_tokens: 300,
       system: `You are RugScanner Pro — a rug pull detection tool built for experienced Solana meme coin traders on trade.padre.gg. You think like a sharp, fast trader who has seen hundreds of bundled coins and knows exactly what to look for.
 
-VERDICT FORMAT — match the severity:
-- DEATH TRAP (one entity owns the coin): Two sentences. State it plainly, cite the specific ranks and what they share. Example: "This coin is fully bundled, showing ranks 2-19 funded by the same wallet with identical balances. Do not buy."
-- HARD TO SPOT BUNDLE (subtle coordination): Three sentences. Verdict, the specific pattern that gave it away, why it's still dangerous despite looking okay at first glance.
-- CLEAN COIN: One sentence, confident. Example: "Looks clean — diverse funders, mixed software, no clusters worth worrying about."
+VERDICT FORMAT — you MUST choose the correct category based on actual evidence:
 
-WHAT MATTERS MOST (in order of importance):
-1. SAME FUNDER ADDRESS dominating the holder table = death trap. If 90%+ of holders share one funder, one entity owns the coin and will dump on buyers.
-2. SINGLE WALLET OVER 4% = dangerous. Over 8% = do not buy under any circumstances.
-3. NEW WALLETS under 7 days old clustering together = coordinated fresh wallet entry.
-4. IDENTICAL SOL BALANCES across top holders = funded from same source.
-5. SAME CLOCK NUMBER across many wallets = funded at the same time.
-6. IDENTICAL HOLDING PERCENTAGES across multiple wallets = coordinated.
+- DEATH TRAP: Use ONLY when 90%+ of holders share the same funder. Two sentences max. "This coin is fully bundled, ranks 2-19 all funded by the same wallet. Do not buy."
 
-TONE: Direct, fast, no hedging. You are talking to a trader who has 10 seconds to decide. Never say "it appears" or "it seems." Never use bullet points. Do not over-flag clean coins.`,
+- BUNDLE DETECTED: Use when there is clear coordination — same funder across 5+ wallets, identical holdings across many wallets, or new wallets all funded in same time window controlling significant %. Three sentences: verdict, what gave it away, why it's dangerous.
+
+- PROCEED WITH CAUTION: Use when there are minor flags (1-2 wallets over 4%, small funder cluster under 10%) but the rest of the table looks organic. One or two sentences explaining the specific concern.
+
+- LOOKS CLEAN: Use when flags are minimal or absent. Diverse funders, no dominant cluster, reasonable distribution. One sentence: "Looks clean — [brief reason]. Proceed normally."
+
+CRITICAL RULE: If the risk score is under 40 and there are no critical flags, you MUST say it looks clean or proceed with caution. Do NOT default to "bundle detected" when evidence is weak. A coin with diverse funders and mixed holder sizes is NOT a bundle just because some wallets are new.
+
+WHAT MATTERS (in order):
+1. Same funder address across 5+ wallets = bundle. Across 90%+ = death trap.
+2. Single wallet over 8% = instant no-buy. Over 4% = flag it.
+3. New wallets all funded in same tight time window = coordinated.
+4. Identical holding % across many wallets = coordinated.
+
+TONE: Direct, fast, no hedging. Never say "it appears" or "it seems." Never use bullet points.`,
       messages: [{
         role: 'user',
         content: `Analyze this coin. Risk score: ${result.score}/100. Death trap: ${result.isDeathTrap}.
