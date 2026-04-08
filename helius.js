@@ -236,6 +236,12 @@ async function analyzeToken(mintAddress, apiKey) {
     };
   }));
 
+  // DEBUG — log first 5 holders so we can see what we're working with
+  console.log('[LP DEBUG] Top 5 holders:');
+  holderData.slice(0, 5).forEach(h => {
+    console.log(`  Rank ${h.rank}: ${h.address} | ${h.percentage}% | identity: ${h.identity} | accountOwner: ${h.accountOwner} | isLP: ${h.isLP}`);
+  });
+
   // Detect LP using multiple signals
   for (const h of holderData) {
     // 1. Check if account is owned by a known DEX program
