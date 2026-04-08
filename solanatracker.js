@@ -60,6 +60,11 @@ async function analyzeTokenST(mintAddress, apiKey, heliusApiKey, deepScan = fals
   const totalSupply = pool?.tokenSupply ? pool.tokenSupply / Math.pow(10, tokenInfo.token?.decimals || 6) : null;
   const holderCount = holdersData?.total || tokenInfo?.holders || null;
 
+  // Debug — log what ST actually returns
+  console.log('[ST] holdersData keys:', Object.keys(holdersData || {}));
+  console.log('[ST] First holder raw:', JSON.stringify((holdersData?.holders || holdersData?.accounts || [])[0] || {}).slice(0, 300));
+  console.log('[ST] tokenInfo risk:', JSON.stringify(riskData || {}).slice(0, 300));
+
   // Map holders to our standard format
   const rawHolders = holdersData?.holders || holdersData?.accounts || [];
 
