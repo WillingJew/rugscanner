@@ -1,6 +1,5 @@
 require('dotenv').config();
 const { analyzeToken } = require('./helius');
-const { analyzeTokenST } = require('./solanatracker');
 const { scrapeFundedBy } = require('./scraper');
 const express = require('express');
 const cors = require('cors');
