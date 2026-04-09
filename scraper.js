@@ -1,9 +1,19 @@
 // RugScanner Pro - Server-side padre.gg scraper
 // Runs headless on Railway — user never sees it
 
-const puppeteer = require('puppeteer');
+let puppeteer;
+try {
+  puppeteer = require('puppeteer');
+  console.log('[Scraper] Puppeteer loaded OK');
+} catch (err) {
+  console.error('[Scraper] Failed to load Puppeteer:', err.message);
+}
 
 async function scrapePadre(mintAddress) {
+  if (!puppeteer) {
+    console.error('[Scraper] Puppeteer not available — skipping scrape');
+    return [];
+  }
   let browser = null;
   console.log('[Scraper] Starting for', mintAddress);
 
@@ -20,8 +30,14 @@ async function scrapePadre(mintAddress) {
         '--no-zygote',
         '--single-process',
         '--disable-extensions',
-      ]
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--memory-pressure-off',
+      ],
+      timeout: 60000,
+      protocolTimeout: 60000,
     });
+    await new Promise(r => setTimeout(r, 1000)); // Let Chrome initialize
 
     const page = await browser.newPage();
 
