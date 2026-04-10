@@ -74,32 +74,44 @@ async function getSolBalance(address) {
 
 async function getFunder(address) {
   try {
-    // Get oldest transaction
     const sigs = await rpc('getSignaturesForAddress', [address, { limit: 1000 }]);
-    if (!sigs?.length) return null;
+    if (!sigs?.length) return { address: null, label: null };
     const oldest = sigs[sigs.length - 1].signature;
 
-    // Parse it
     const tx = await rpc('getTransaction', [oldest, { 
       encoding: 'jsonParsed', 
       maxSupportedTransactionVersion: 0 
     }]);
-    if (!tx) return null;
+    if (!tx) return { address: null, label: null };
 
     const accounts = tx.transaction?.message?.accountKeys || [];
     const pre = tx.meta?.preBalances || [];
     const post = tx.meta?.postBalances || [];
 
-    // Find who sent SOL — balance decreased, not system addr, not the wallet itself
+    let funderAddress = null;
     for (let i = 0; i < accounts.length; i++) {
       const pk = accounts[i]?.pubkey || accounts[i];
       if (!pk || pk === address) continue;
       if (SYSTEM_ADDRS.has(pk)) continue;
       const decrease = (pre[i] || 0) - (post[i] || 0);
-      if (decrease >= 1000000) return pk; // at least 0.001 SOL sent
+      if (decrease >= 1000000) { funderAddress = pk; break; }
     }
-    return null;
-  } catch { return null; }
+
+    if (!funderAddress) return { address: null, label: null };
+
+    // Resolve label via Helius Enhanced API
+    try {
+      const res = await fetch(
+        `https://api.helius.xyz/v0/addresses/${funderAddress}/labels?api-key=${process.env.HELIUS_API_KEY}`
+      );
+      const data = await res.json();
+      const label = data?.label || null;
+      return { address: funderAddress, label };
+    } catch {
+      return { address: funderAddress, label: null };
+    }
+
+  } catch { return { address: null, label: null }; }
 }
 
 async function analyzeToken(mint) {
@@ -163,12 +175,14 @@ async function enrichWithFunders(holders) {
     )
   );
 
-  for (let i = 0; i < targets.length; i++) {
+ for (let i = 0; i < targets.length; i++) {
     const funder = results[i].status === 'fulfilled' ? results[i].value : null;
     const holder = holders.find(h => h.address === targets[i].address);
-    if (holder) holder.funder = funder;
+    if (holder) {
+      holder.funder = funder?.address ?? null;
+      holder.funderLabel = funder?.label ?? null;
+    }
   }
-
   return holders;
 }
 
