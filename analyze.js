@@ -70,6 +70,38 @@ function analyze(tokenData) {
     }
   }
 
+   // ── 3b. CEX LABEL CLUSTERS ───────────────────────────────────────────────
+  // Wallets funded by different addresses but same CEX label (e.g. 6x "Coinbase")
+  const CEX_LABELS = ['coinbase', 'binance', 'kraken', 'okx', 'bybit', 'kucoin'];
+  const cexLabelMap = {};
+
+  for (const h of real) {
+    if (!h.funderLabel) continue;
+    const label = h.funderLabel.toLowerCase();
+    const match = CEX_LABELS.find(cex => label.includes(cex));
+    if (!match) continue;
+    if (!cexLabelMap[match]) cexLabelMap[match] = [];
+    cexLabelMap[match].push(h);
+  }
+
+  for (const [cex, group] of Object.entries(cexLabelMap)) {
+    if (group.length < 3) continue;
+    const totalPct = group.reduce((s, h) => s + h.percentage, 0);
+    const ranks = group.map(h => `#${h.rank}`).join(', ');
+    const label = cex.charAt(0).toUpperCase() + cex.slice(1);
+
+    if (group.length >= 5 || totalPct >= 15) {
+      flag(`${group.length} wallets all funded via ${label} — ${totalPct.toFixed(1)}% combined`, 'critical',
+        `Ranks: ${ranks} — CEX-sourced cluster, coordinated setup disguised as retail`);
+      noBuy.push(`${group.length} ${label}-funded wallets control ${totalPct.toFixed(1)}%`);
+      score += 35;
+    } else {
+      flag(`${group.length} wallets all funded via ${label} — ${totalPct.toFixed(1)}% combined`, 'high',
+        `Ranks: ${ranks} — same CEX funder across multiple wallets is suspicious`);
+      score += 20;
+    }
+  }
+  
   // ── 4. INDIVIDUAL WALLET % ────────────────────────────────────────────────
   for (const h of real) {
     if (h.percentage >= 8) {
