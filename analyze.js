@@ -123,11 +123,19 @@ function analyze(tokenData) {
     pctGroups[key] = (pctGroups[key] || []);
     pctGroups[key].push(h);
   }
-  for (const [pct, group] of Object.entries(pctGroups)) {
+ for (const [pct, group] of Object.entries(pctGroups)) {
     if (group.length < 5) continue;
-    flag(`${group.length} wallets all hold exactly ${pct}% — identical holdings`, 'high',
-      'Natural buying never creates perfect identical percentages');
-    score += 20;
+
+    if (group.length >= 8) {
+      flag(`${group.length} wallets all hold exactly ${pct}% — identical holdings`, 'critical',
+        'Natural buying never creates perfect identical percentages — this is a bundle');
+      noBuy.push(`${group.length} wallets hold identical ${pct}% — coordinated bundle`);
+      score += 50;
+    } else if (group.length >= 5) {
+      flag(`${group.length} wallets all hold exactly ${pct}% — identical holdings`, 'high',
+        'Natural buying never creates perfect identical percentages');
+      score += 20;
+    }
   }
 
   // ── 6. SOL BALANCE UNIFORMITY ────────────────────────────────────────────
