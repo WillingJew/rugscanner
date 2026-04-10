@@ -99,17 +99,7 @@ async function getFunder(address) {
 
     if (!funderAddress) return { address: null, label: null };
 
-    // Resolve label via Helius Enhanced API
-    try {
-      const res = await fetch(
-        `https://api.helius.xyz/v0/addresses/${funderAddress}/labels?api-key=${process.env.HELIUS_API_KEY}`
-      );
-      const data = await res.json();
-      const label = data?.label || null;
-      return { address: funderAddress, label };
-    } catch {
-      return { address: funderAddress, label: null };
-    }
+       return { address: funderAddress, label: null };
 
   } catch { return { address: null, label: null }; }
 }
