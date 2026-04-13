@@ -49,7 +49,8 @@ Rules for your response:
 //   app.post('/analyze-scraped', requireAuth, requirePro, analyzeScrapedRoute);
 
 async function analyzeScrapedRoute(req, res) {
-  const { ca, lpAddress, holders, holderCount, source } = req.body;
+  const { ca, lpAddress, holders, holderCount, source, mode } = req.body;
+  const runAI = mode === 'ai';
 
   // Basic validation
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
@@ -89,13 +90,14 @@ async function analyzeScrapedRoute(req, res) {
     };
     const analysisResult = analyze(tokenData);
 
-    // Step 4: Generate AI verdict (always — scrape data is reliable enough)
+    // Step 4: Generate AI verdict (only for AI scan mode)
     let verdict = null;
-    try {
-      verdict = await generateVerdict(analysisResult, tokenData.holderCount);
-    } catch (aiErr) {
-      console.error('[AnalyzeScrape] AI verdict failed:', aiErr.message);
-      verdict = null; // Non-fatal — return score without verdict
+    if (runAI) {
+      try {
+        verdict = await generateVerdict(analysisResult, tokenData.holderCount);
+      } catch (aiErr) {
+        console.error('[AnalyzeScrape] AI verdict failed:', aiErr.message);
+      }
     }
 
     // Step 5: Return result
