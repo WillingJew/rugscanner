@@ -1,254 +1,226 @@
-// RugScanner Pro — Padre.gg Content Script
-// Scrapes the holders table, identifies LP by "LIQ POOL" label,
-// sends clean holder data to the backend for analysis.
+// RugScanner Pro — Padre.gg Content Script v4
+// Confirmed working approach from live DOM investigation:
+//   - Holder rows use class css-1vec7k8
+//   - LP row uses class css-1kujlje with "LIQ POOL" text
+//   - Full addresses are in React fiber memoizedProps.address
+//   - Row structure parsed from document.body.innerText
+//   - Percentages calculated from balance / totalBalance
+//   - Scrollable container has class "padre-no-scroll" (plain, no extra classes)
 
-const BACKEND_URL = 'https://your-railway-app.railway.app'; // TODO: replace with your Railway URL
-const CHECK_INTERVAL_MS = 500;
-const MAX_WAIT_MS = 10000;
+const BACKEND_URL = 'https://your-railway-app.railway.app'; // TODO: replace
 
-// ── Utility: wait for a DOM element to appear ────────────────────────────────
-function waitForElement(selector, maxMs = MAX_WAIT_MS) {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const interval = setInterval(() => {
-      const el = document.querySelector(selector);
-      if (el) {
-        clearInterval(interval);
-        resolve(el);
-      } else if (Date.now() - start > maxMs) {
-        clearInterval(interval);
-        reject(new Error(`Timed out waiting for: ${selector}`));
-      }
-    }, CHECK_INTERVAL_MS);
-  });
-}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ── Utility: wait for condition ───────────────────────────────────────────────
-function waitForCondition(fn, maxMs = MAX_WAIT_MS) {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const interval = setInterval(() => {
-      const result = fn();
-      if (result) {
-        clearInterval(interval);
-        resolve(result);
-      } else if (Date.now() - start > maxMs) {
-        clearInterval(interval);
-        reject(new Error('Condition timed out'));
-      }
-    }, CHECK_INTERVAL_MS);
-  });
-}
-
-// ── Extract token CA from the current URL or page ────────────────────────────
+// ── Get token CA from URL ─────────────────────────────────────────────────────
 function getTokenCA() {
-  // padre.gg URL format: trade.padre.gg/TOKEN_CA or similar
-  const url = window.location.href;
+  const match = window.location.pathname.match(/\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:\/|$)/);
+  return match ? match[1] : null;
+}
 
-  // Try URL path first
-  const pathMatch = url.match(/\/([1-9A-HJ-NP-Za-km-z]{32,44})(?:[/?#]|$)/);
-  if (pathMatch) return pathMatch[1];
+// ── Get React fiber key for any element ──────────────────────────────────────
+function getFiberKey(el) {
+  return Object.keys(el).find(k => k.startsWith('__reactFiber'));
+}
 
-  // Try CA element on page (right sidebar shows "CA: ...")
-  const caEl = document.querySelector('[class*="ca"]');
-  if (caEl) {
-    const match = caEl.textContent.match(/([1-9A-HJ-NP-Za-km-z]{32,44})/);
-    if (match) return match[1];
+// ── Walk fiber tree upward to find address prop ───────────────────────────────
+function getFiberAddress(el) {
+  const fk = getFiberKey(el);
+  if (!fk) return null;
+  let f = el[fk];
+  for (let i = 0; i < 8; i++) {
+    if (f?.memoizedProps?.address && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(f.memoizedProps.address)) {
+      return { address: f.memoizedProps.address, rank: Math.abs(f.memoizedProps.rank) };
+    }
+    f = f?.return;
   }
-
   return null;
 }
 
-// ── Click the Holders tab if not already active ───────────────────────────────
-async function ensureHoldersTabActive() {
-  // Find all tab buttons and look for one containing "Holders"
-  const tabs = document.querySelectorAll('button, [role="tab"], .tab, [class*="tab"]');
-  let holdersTab = null;
-
-  for (const tab of tabs) {
-    if (tab.textContent.trim().match(/^Holders/i)) {
-      holdersTab = tab;
-      break;
-    }
-  }
-
-  if (!holdersTab) {
-    throw new Error('Could not find Holders tab');
-  }
-
-  // Check if already active — look for active class or aria-selected
-  const isActive = holdersTab.classList.contains('active') ||
-    holdersTab.getAttribute('aria-selected') === 'true' ||
-    holdersTab.classList.contains('selected') ||
-    holdersTab.style.color === 'rgb(255, 255, 255)';
-
-  if (!isActive) {
-    console.log('[RugScanner] Clicking Holders tab...');
-    holdersTab.click();
-    // Wait for table rows to appear
-    await new Promise(r => setTimeout(r, 800));
-  }
+// ── Find the holder list scroll container ────────────────────────────────────
+function findScrollContainer() {
+  // The holders list uses a plain .padre-no-scroll div (no extra MUI classes)
+  return Array.from(document.querySelectorAll('.padre-no-scroll'))
+    .filter(el => el.className.trim() === 'padre-no-scroll')[0] || null;
 }
 
-// ── Scrape the holders table ──────────────────────────────────────────────────
-function scrapeHoldersTable() {
+// ── Ensure Holders tab is active ──────────────────────────────────────────────
+async function ensureHoldersTab() {
+  const all = Array.from(document.querySelectorAll('button, div'));
+  const btn = all.find(el => /^Holders(\s*\(\d+\))?$/.test(el.textContent?.trim()));
+  if (!btn) throw new Error('Holders tab not found');
+  const isActive = btn.style.color === 'rgb(255, 255, 255)' ||
+    btn.className?.includes('active') ||
+    btn.getAttribute('aria-selected') === 'true';
+  if (!isActive) { btn.click(); await sleep(1000); }
+}
+
+// ── Extract addresses from currently visible holder rows ──────────────────────
+function extractVisibleAddresses() {
+  const map = {}; // rank -> address
+
+  // Regular holder rows (css-1vec7k8)
+  const rows = Array.from(document.querySelectorAll('*'))
+    .filter(el => el.className?.includes?.('css-1vec7k8'));
+  for (const el of rows) {
+    const data = getFiberAddress(el);
+    if (data && data.rank > 0) map[data.rank] = data.address;
+  }
+
+  return map;
+}
+
+// ── Get LP address from the LIQ POOL row ─────────────────────────────────────
+function getLPAddress() {
+  const all = Array.from(document.querySelectorAll('*'));
+  // Find the element that displays "LIQ POOL" text
+  const liqEl = all.find(el => el.childElementCount === 0 && el.textContent.trim() === 'LIQ POOL');
+  if (!liqEl) return null;
+
+  // Walk up to find fiber with address (LP uses css-1kujlje container)
+  let el = liqEl;
+  for (let i = 0; i < 10; i++) {
+    const data = getFiberAddress(el);
+    if (data) return data.address;
+    el = el.parentElement;
+    if (!el) break;
+  }
+  return null;
+}
+
+// ── Parse innerText for row structure ────────────────────────────────────────
+// Each row in innerText: rank → truncAddr → balance → ...
+// Detection: a line matching /^\d+$/ followed by a truncated address or "LIQ POOL"
+function parseHolderRows() {
+  const text = document.body.innerText;
+  const headerIdx = text.indexOf('Rank\nAddress\nBalance');
+  if (headerIdx === -1) return null;
+
+  let endIdx = text.indexOf('\nInvested\n', headerIdx);
+  if (endIdx === -1) endIdx = text.indexOf('\nP1\nP2\nP3\n', headerIdx);
+  if (endIdx === -1) endIdx = headerIdx + 8000;
+
+  const lines = text.slice(headerIdx, endIdx).split('\n').map(l => l.trim()).filter(Boolean);
+
+  const isRank = s => /^\d+$/.test(s) && +s > 0 && +s < 500;
+  const isAddr = s => /^[A-Za-z0-9]{2,6}[…\.]{1,3}[A-Za-z0-9]{2,6}$/.test(s) || s === 'LIQ POOL';
+
+  const rowStarts = [];
+  for (let i = 1; i < lines.length - 1; i++) {
+    if (isRank(lines[i]) && isAddr(lines[i + 1])) rowStarts.push(i);
+  }
+
+  return rowStarts.map(start => ({
+    rank: +lines[start],
+    isLP: lines[start + 1] === 'LIQ POOL',
+    balance: parseFloat(lines[start + 2]?.replace(/,/g, '')) || 0,
+  }));
+}
+
+// ── Main scrape ───────────────────────────────────────────────────────────────
+async function scrapeHolders() {
+  await ensureHoldersTab();
+  await sleep(800);
+
+  const container = findScrollContainer();
+  if (!container) throw new Error('Holder list scroll container not found');
+
+  // Scroll to top
+  container.scrollTop = 0;
+  await sleep(500);
+
+  // Collect LP address while rank 1-5 are visible
+  let lpAddress = getLPAddress();
+  if (lpAddress) console.log('[RugScanner] LP address captured at top:', lpAddress);
+
+  // Scroll through entire list collecting fiber addresses
+  const addressMap = {};
+  const stepSize = Math.floor(container.clientHeight * 0.55);
+  let pos = 0, passes = 0;
+
+  console.log('[RugScanner] Scanning holders...');
+
+  while (passes < 60) {
+    Object.assign(addressMap, extractVisibleAddresses());
+    // Also retry LP capture in case it wasn't visible at top
+    if (!lpAddress) lpAddress = getLPAddress();
+
+    const atBottom = pos >= container.scrollHeight - container.clientHeight - 5;
+    if (atBottom) break;
+
+    pos = Math.min(pos + stepSize, container.scrollHeight);
+    container.scrollTop = pos;
+    await sleep(200);
+    passes++;
+  }
+  // Final extract at bottom
+  Object.assign(addressMap, extractVisibleAddresses());
+  if (!lpAddress) lpAddress = getLPAddress();
+
+  // Scroll back to top for innerText parse (innerText reflects visible content)
+  container.scrollTop = 0;
+  await sleep(500);
+
+  // Parse row structure from innerText (now showing top rows)
+  const rows = parseHolderRows();
+  if (!rows || rows.length === 0) {
+    throw new Error('Could not parse holder rows — is the Holders tab visible?');
+  }
+
+  console.log(`[RugScanner] Parsed ${rows.length} rows | Addresses: ${Object.keys(addressMap).length} | LP: ${lpAddress || 'not found'}`);
+
+  const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
   const holders = [];
-  let lpAddress = null;
-
-  // Find table rows — padre uses a virtualized list or standard table
-  // Try standard table rows first
-  let rows = document.querySelectorAll('table tbody tr, [class*="holder-row"], [class*="holderRow"]');
-
-  // Fallback: find rows by structure (rank number in first cell)
-  if (!rows || rows.length === 0) {
-    rows = document.querySelectorAll('[class*="row"]:not([class*="header"])');
-  }
-
-  if (!rows || rows.length === 0) {
-    throw new Error('No holder rows found in DOM');
-  }
-
-  console.log(`[RugScanner] Found ${rows.length} rows`);
 
   for (const row of rows) {
-    const text = row.textContent || '';
-
-    // Skip header rows
-    if (text.includes('Rank') && text.includes('Address') && text.includes('Balance')) continue;
-    if (text.trim().length < 5) continue;
-
-    // Extract rank — first number in the row
-    const rankMatch = text.match(/^[\s]*(\d+)/);
-    const rank = rankMatch ? parseInt(rankMatch[1]) : null;
-    if (!rank || rank > 200) continue;
-
-    // Detect LIQ POOL label
-    const isLP = text.includes('LIQ POOL') || text.includes('LIQ_POOL') || text.includes('LIQPOOL');
-
-    // Extract wallet address — 32-44 char base58 string
-    // Padre shows truncated addresses like "7CtW_Hb4" — we need the full address
-    // Look for a data attribute or full address in child elements
-    let address = null;
-
-    // Try data attributes first (padre often stores full address here)
-    const addrEl = row.querySelector('[data-address], [data-wallet], [title]');
-    if (addrEl) {
-      const candidate = addrEl.getAttribute('data-address') ||
-        addrEl.getAttribute('data-wallet') ||
-        addrEl.getAttribute('title') || '';
-      if (candidate.match(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/)) {
-        address = candidate;
-      }
+    if (row.isLP) {
+      if (!lpAddress) lpAddress = addressMap[row.rank] || null;
+      continue;
     }
-
-    // Fallback: scan all text nodes for a full base58 address
-    if (!address) {
-      const allText = row.innerHTML;
-      const addrMatch = allText.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
-      if (addrMatch) {
-        // Filter out known non-address strings (program IDs we don't care about)
-        address = addrMatch.find(a => a.length >= 32 && a.length <= 44) || null;
-      }
-    }
-
-    // Extract percentage from the "Remaining" column
-    // Padre shows it as "$ X | Y%" format in the remaining column
-    let percentage = null;
-    const pctMatch = text.match(/(\d+\.?\d*)\s*%/);
-    if (pctMatch) {
-      percentage = parseFloat(pctMatch[1]);
-    }
-
-    // Extract balance
-    let balance = null;
-    const balMatch = text.match(/≡\s*([\d,.]+)/);
-    if (balMatch) {
-      balance = parseFloat(balMatch[1].replace(',', ''));
-    }
-
-    if (isLP) {
-      lpAddress = address;
-      console.log(`[RugScanner] LP found at rank ${rank}: ${address}`);
-      continue; // Don't add LP to holders array
-    }
-
-    if (rank && percentage !== null) {
-      holders.push({
-        rank,
-        address: address || `unknown_${rank}`,
-        percentage,
-        balance,
-        isLP: false,
-        funder: null,
-      });
-    }
+    holders.push({
+      rank: row.rank,
+      address: addressMap[row.rank] || `unknown_rank_${row.rank}`,
+      percentage: totalBalance > 0 ? Math.round(row.balance / totalBalance * 10000) / 100 : 0,
+      balance: row.balance,
+      isLP: false,
+      funder: null,
+    });
   }
 
-  return { holders, lpAddress };
+  // Re-rank sequentially
+  holders.sort((a, b) => a.rank - b.rank);
+  holders.forEach((h, i) => { h.rank = i + 1; });
+
+  return { holders, lpAddress, holderCount: rows.length };
 }
 
-// ── Main scan function — called when user triggers scan ───────────────────────
+// ── Run scan ──────────────────────────────────────────────────────────────────
 async function runScan(authToken) {
-  console.log('[RugScanner] Starting scan...');
-
   const ca = getTokenCA();
-  if (!ca) throw new Error('Could not detect token CA from this page');
-  console.log('[RugScanner] Token CA:', ca);
+  if (!ca) throw new Error('Could not detect token CA — are you on a token page?');
+  console.log('[RugScanner] Scanning CA:', ca);
 
-  // Make sure holders tab is visible
-  await ensureHoldersTabActive();
+  const { holders, lpAddress, holderCount } = await scrapeHolders();
+  if (holders.length === 0) throw new Error('No holders found');
 
-  // Wait for rows to populate
-  await waitForCondition(() => {
-    const rows = document.querySelectorAll('table tbody tr, [class*="holder-row"], [class*="holderRow"]');
-    return rows && rows.length > 3;
-  });
-
-  // Scrape the table
-  const { holders, lpAddress } = scrapeHoldersTable();
-  console.log(`[RugScanner] Scraped ${holders.length} holders, LP: ${lpAddress}`);
-
-  if (holders.length === 0) {
-    throw new Error('No holders found — try clicking the Holders tab manually first');
-  }
-
-  // Send to backend
   const response = await fetch(`${BACKEND_URL}/analyze-scraped`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${authToken}`,
-    },
-    body: JSON.stringify({
-      ca,
-      lpAddress,
-      holders,
-      holderCount: holders.length,
-      source: 'padre_scrape',
-    }),
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+    body: JSON.stringify({ ca, lpAddress, holders, holderCount, source: 'padre_scrape_v4' }),
   });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Backend error: ${err}`);
-  }
-
+  if (!response.ok) throw new Error(`Backend error ${response.status}: ${await response.text()}`);
   return await response.json();
 }
 
-// ── Message listener — receives commands from popup/background ────────────────
+// ── Message listener ──────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SCAN_TOKEN') {
     runScan(message.authToken)
       .then(result => sendResponse({ success: true, result }))
       .catch(err => sendResponse({ success: false, error: err.message }));
-    return true; // Keep channel open for async response
+    return true;
   }
-
-  if (message.type === 'GET_CA') {
-    const ca = getTokenCA();
-    sendResponse({ ca });
-  }
+  if (message.type === 'GET_CA') sendResponse({ ca: getTokenCA() });
 });
 
-console.log('[RugScanner] Content script loaded on', window.location.href);
+console.log('[RugScanner] Content script v4 loaded');
