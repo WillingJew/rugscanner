@@ -1,8 +1,9 @@
-// analyze-scraped.js v2
-// Content script sends: CA + lpAddress (scraped from padre)
-// Backend does: Helius top holders + supply, excludes known LP, scores, optionally verdicts
+// analyze-scraped.js v3
+// Receives: CA + lpAddress + funderMap (scraped from padre)
+// Uses Helius for: top holders + supply (accurate on-chain data)
+// Merges padre funders into holder objects before scoring
 
-const { analyzeToken, enrichWithFunders, getTokenSupply } = require('./helius');
+const { analyzeToken, enrichWithFunders } = require('./helius');
 const { analyze } = require('./analyze');
 const Anthropic = require('@anthropic-ai/sdk');
 
@@ -30,9 +31,9 @@ FLAGS:
 ${flagSummary || 'None'}
 
 Rules:
-- Death traps (score 90+, deathTrap=true): exactly 2 sentences. Direct and brutal.
-- Subtle bundles (score 50-89): exactly 3 sentences. Explain the specific risk pattern.
-- Clean coins (score 0-49, no noBuy): exactly 1 sentence. Call it clean confidently.
+- Death traps (score 90+, deathTrap=true): 2 sentences. Direct and brutal.
+- Subtle bundles (score 50-89): 3 sentences. Explain the specific risk pattern.
+- Clean coins (score 0-49, no noBuy): 1 sentence. Call it clean confidently.
 - Never mention "score" or numbers. Speak like a trader.
 - Do not start with "I" or "This coin".` }],
   });
@@ -41,38 +42,56 @@ Rules:
 }
 
 async function analyzeScrapedRoute(req, res) {
-  const { ca, lpAddress, mode } = req.body;
+  const { ca, lpAddress, funderMap, mode } = req.body;
   const runAI = mode === 'ai';
 
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
 
-  console.log(`[AnalyzeScrape] CA: ${ca} | LP: ${lpAddress || 'unknown'} | mode: ${mode}`);
+  console.log(`[AnalyzeScrape] CA: ${ca} | LP: ${lpAddress || 'none'} | Funders scraped: ${Object.keys(funderMap || {}).length} | mode: ${mode}`);
 
   try {
-    // ── Step 1: Fetch real holder data from Helius ────────────────────────────
-    // analyzeToken fetches top holders + supply from chain
+    // ── Step 1: Get real holder data from Helius ──────────────────────────────
     const tokenData = await analyzeToken(ca);
 
-    // ── Step 2: Mark LP using the address padre told us ───────────────────────
-    // If padre gave us the LP address, use it to correctly flag that holder
+    // ── Step 2: Mark LP using padre-scraped address ───────────────────────────
     if (lpAddress) {
       for (const h of tokenData.holders) {
         if (h.address === lpAddress) {
           h.isLP = true;
-          console.log(`[AnalyzeScrape] LP confirmed by padre scrape: ${lpAddress.slice(0,8)}... at rank ${h.rank}`);
+          console.log(`[AnalyzeScrape] LP confirmed: ${lpAddress.slice(0,8)}... rank ${h.rank}`);
           break;
         }
       }
     }
 
-    // ── Step 3: Enrich with funders ───────────────────────────────────────────
-    console.log(`[AnalyzeScrape] Enriching funders...`);
-    await enrichWithFunders(tokenData.holders);
+    // ── Step 3: Merge padre-scraped funders into holder objects ───────────────
+    // funderMap is { rank -> truncatedFunder } e.g. { "2": "2NJQY…yDoB", "3": "Coinbase" }
+    // We match by rank to the Helius holder list
+    if (funderMap && Object.keys(funderMap).length > 0) {
+      const realHolders = tokenData.holders.filter(h => !h.isLP);
+      for (const h of realHolders) {
+        const scraped = funderMap[String(h.rank)];
+        if (scraped && !h.funder) {
+          h.funder = scraped; // use truncated funder from padre
+          h.funderSource = 'padre';
+        }
+      }
+      const mergedCount = realHolders.filter(h => h.funderSource === 'padre').length;
+      console.log(`[AnalyzeScrape] Merged ${mergedCount} padre funders into holder data`);
+    }
 
-    // ── Step 4: Score ─────────────────────────────────────────────────────────
+    // ── Step 4: Helius funder enrichment for wallets padre didn't cover ───────
+    // Only enrich wallets that didn't get a funder from padre scrape
+    const needsEnrichment = tokenData.holders.filter(h => !h.isLP && !h.funder);
+    if (needsEnrichment.length > 0) {
+      console.log(`[AnalyzeScrape] Helius enriching ${needsEnrichment.length} remaining wallets...`);
+      await enrichWithFunders(tokenData.holders);
+    }
+
+    // ── Step 5: Score ─────────────────────────────────────────────────────────
     const analysisResult = analyze(tokenData);
 
-    // ── Step 5: AI verdict ────────────────────────────────────────────────────
+    // ── Step 6: AI verdict ────────────────────────────────────────────────────
     let verdict = null;
     if (runAI) {
       try {
@@ -93,7 +112,7 @@ async function analyzeScrapedRoute(req, res) {
       stats: analysisResult.stats,
       holderCount: tokenData.holderCount,
       verdict,
-      source: 'helius_with_padre_lp',
+      source: 'helius_with_padre_funders',
     });
 
   } catch (err) {
