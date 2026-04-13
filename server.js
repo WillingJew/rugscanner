@@ -379,7 +379,8 @@ app.post('/scan/test', requireAuth, async (req, res) => {
 });
 
 // ── SCAN ROUTES ───────────────────────────────────────────────────────────────
-
+const { analyzeScrapedRoute } = require('./analyze-scraped');
+app.post('/analyze-scraped', requireAuth, analyzeScrapedRoute);
 app.post('/scan/quick', requireAuth, async (req, res) => {
   const { ca } = req.body;
   if (!ca) return res.status(400).json({ error: 'CA required' });
