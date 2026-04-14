@@ -173,6 +173,39 @@ function analyze(tokenData) {
   }
 
   // ── 7. TOP HOLDER CONCENTRATION ──────────────────────────────────────────
+
+  // ── 6b. WALLET BIRTH TIME CLUSTERING ─────────────────────────────────────
+  // If many holders' wallets were created within the same 5-minute window = coordinated
+  const withBirth = real.filter(h => h.fundedAt != null);
+  if (withBirth.length >= 4) {
+    // Sort by birth time, then find the largest cluster within 300s (5 min)
+    const sorted = [...withBirth].sort((a, b) => a.fundedAt - b.fundedAt);
+    let bestCluster = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+      const window = sorted.filter(h => h.fundedAt >= sorted[i].fundedAt && h.fundedAt <= sorted[i].fundedAt + 300);
+      if (window.length > bestCluster.length) bestCluster = window;
+    }
+
+    if (bestCluster.length >= 5) {
+      const totalPct = bestCluster.reduce((s, h) => s + h.percentage, 0);
+      const ranks = bestCluster.map(h => `#${h.rank}`).join(', ');
+      const spanSec = bestCluster[bestCluster.length - 1].fundedAt - bestCluster[0].fundedAt;
+      const spanLabel = spanSec < 60 ? `${spanSec}s` : `${Math.round(spanSec / 60)}m`;
+
+      if (bestCluster.length >= 8) {
+        flag(`${bestCluster.length} wallets all created within ${spanLabel} of each other`, 'critical',
+          `Ranks: ${ranks} — ${totalPct.toFixed(1)}% combined — coordinated wallet creation`);
+        noBuy.push(`${bestCluster.length} wallets born in same ${spanLabel} window — coordinated`);
+        score += 40;
+      } else {
+        flag(`${bestCluster.length} wallets created within ${spanLabel} of each other`, 'high',
+          `Ranks: ${ranks} — ${totalPct.toFixed(1)}% combined`);
+        score += 20;
+      }
+    }
+  }
+
   const top5pct = real.slice(0, 5).reduce((s, h) => s + h.percentage, 0);
   const top10pct = real.slice(0, 10).reduce((s, h) => s + h.percentage, 0);
 
