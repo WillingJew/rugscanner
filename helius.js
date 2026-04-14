@@ -102,6 +102,15 @@ async function getFunder(address) {
   } catch { return null; }
 }
 
+async function getWalletBirthTime(address) {
+  try {
+    const sigs = await rpc('getSignaturesForAddress', [address, { limit: 1000 }]);
+    if (!sigs?.length) return null;
+    const oldest = sigs[sigs.length - 1];
+    return oldest.blockTime || null; // unix timestamp
+  } catch { return null; }
+}
+
 async function analyzeToken(mint) {
   console.log('[Helius] Analyzing', mint);
 
@@ -150,26 +159,38 @@ async function analyzeToken(mint) {
 }
 
 async function enrichWithFunders(holders) {
-  // Only fetch funders for real (non-LP) top 15 holders
+  // Only fetch for real (non-LP) top 15 holders
   const targets = holders.filter(h => !h.isLP).slice(0, 15);
-  console.log('[Helius] Fetching funders for', targets.length, 'wallets...');
+  console.log('[Helius] Fetching funders + birth times for', targets.length, 'wallets...');
 
-  const results = await Promise.allSettled(
-    targets.map(h => 
-      Promise.race([
-        getFunder(h.address),
-        new Promise(res => setTimeout(() => res(null), 8000)) // 8s timeout per wallet
-      ])
+  // Fetch funders and birth times in parallel
+  const [funderResults, birthResults] = await Promise.all([
+    Promise.allSettled(
+      targets.map(h => 
+        Promise.race([
+          getFunder(h.address),
+          new Promise(res => setTimeout(() => res(null), 8000))
+        ])
+      )
+    ),
+    Promise.allSettled(
+      targets.map(h => 
+        Promise.race([
+          getWalletBirthTime(h.address),
+          new Promise(res => setTimeout(() => res(null), 8000))
+        ])
+      )
     )
-  );
+  ]);
 
   for (let i = 0; i < targets.length; i++) {
-    const funder = results[i].status === 'fulfilled' ? results[i].value : null;
     const holder = holders.find(h => h.address === targets[i].address);
-    if (holder) holder.funder = funder;
+    if (!holder) continue;
+    holder.funder = funderResults[i].status === 'fulfilled' ? funderResults[i].value : null;
+    holder.fundedAt = birthResults[i].status === 'fulfilled' ? birthResults[i].value : null;
   }
 
   return holders;
 }
 
-module.exports = { analyzeToken, enrichWithFunders, getTokenSupply };
+module.exports = { analyzeToken, enrichWithFunders, getTokenSupply, getWalletBirthTime };
