@@ -174,6 +174,30 @@ function analyze(tokenData) {
 
   // ── 7. TOP HOLDER CONCENTRATION ──────────────────────────────────────────
 
+  // ── 6c. CLOCK BADGE DETECTION (scraped from Terminal UI) ─────────────────
+  // Terminal shows clock icons with numbers indicating how many wallets share a funder
+  // clockIconCount = how many rows had the icon, maxClockNumber = biggest group size
+  const clockIconCount = tokenData.clockIconCount || 0;
+  const maxClockNumber = tokenData.maxClockNumber || 0;
+
+  if (clockIconCount > 0 || maxClockNumber > 0) {
+    if (maxClockNumber >= 10) {
+      flag(`${maxClockNumber} accounts connected via same funder (Terminal clock badge)`, 'critical',
+        `${clockIconCount} rows flagged — Terminal detected coordinated funding across ${maxClockNumber} wallets`);
+      noBuy.push(`${maxClockNumber} wallets connected — coordinated bundle`);
+      score += 45;
+    } else if (clockIconCount >= 10) {
+      flag(`${clockIconCount} holders have clock badges — widespread funder connections`, 'critical',
+        `Largest connected group: ${maxClockNumber} wallets`);
+      noBuy.push(`${clockIconCount} holders flagged with funder connections`);
+      score += 40;
+    } else if (clockIconCount >= 4) {
+      flag(`${clockIconCount} holders have clock badges — funder connections detected`, 'high',
+        `Largest connected group: ${maxClockNumber} wallets`);
+      score += 20;
+    }
+  }
+
   // ── 6b. WALLET BIRTH TIME CLUSTERING ─────────────────────────────────────
   // If many holders' wallets were created within the same 5-minute window = coordinated
   const withBirth = real.filter(h => h.fundedAt != null);
