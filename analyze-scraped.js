@@ -95,44 +95,41 @@ async function analyzeScrapedRoute(req, res) {
     console.log(`[AnalyzeScrape] Merged ${mergedFunders} funders, ${mergedPercentages} percentages`);
 
     // ── Step 4: Find dominant funder from scraped data ────────────────────────
-    // KEY INSIGHT: padre's cluster count is pre-calculated across ALL holders
-    // The number shown next to a funder (e.g. "35" before "pwZ5j…Gz31") means
-    // padre already detected 35 coordinated wallets from that funder.
-    // We trust this number over counting appearances ourselves (we only see ~6 rows).
+    // We can only see ~25-30 rows out of potentially thousands due to virtualization.
+    // The KEY metric is the RATIO: if 9/10 visible rows share a funder, that's 90%
+    // coordination regardless of total holder count.
+    // padre's per-row cluster count reflects time-based batches, NOT the full total —
+    // so we count appearances ourselves and use the ratio as the signal.
 
     const funderGroups = {};
+    let totalScrapedNonLP = 0;
+
     for (const h of realHolders) {
       if (!h.funder) continue;
+      totalScrapedNonLP++;
       if (!funderGroups[h.funder]) funderGroups[h.funder] = { count: 0, maxClusterCount: 0, ranks: [] };
       funderGroups[h.funder].count++;
       funderGroups[h.funder].ranks.push(h.rank);
-      // clusterCount from padre is the authoritative total — take the max seen
       if (h.clusterCount && h.clusterCount > funderGroups[h.funder].maxClusterCount) {
         funderGroups[h.funder].maxClusterCount = h.clusterCount;
       }
     }
 
-    // Dominant funder = highest padre cluster count (most reliable signal)
-    // Fall back to most appearances if no cluster counts available
+    // Dominant funder = most appearances in scraped rows
     let dominantFunder = null;
-    let maxCluster = 0;
-    let maxAppearances = 0;
+    let maxCount = 0;
     for (const [funder, data] of Object.entries(funderGroups)) {
-      // Prefer cluster count as it reflects padre's full analysis
-      if (data.maxClusterCount > maxCluster) {
-        maxCluster = data.maxClusterCount;
+      if (data.count > maxCount) {
+        maxCount = data.count;
         dominantFunder = { funder, ...data };
-      } else if (data.maxClusterCount === 0 && data.count > maxAppearances) {
-        maxAppearances = data.count;
-        if (!dominantFunder) dominantFunder = { funder, ...data };
       }
     }
 
-    if (dominantFunder) {
-      // Use padre's cluster count as the real wallet count if available
-      const realCount = dominantFunder.maxClusterCount || dominantFunder.count;
-      dominantFunder.realCount = realCount;
-      console.log(`[AnalyzeScrape] Dominant funder: ${dominantFunder.funder} | padre cluster count: ${dominantFunder.maxClusterCount} | appearances: ${dominantFunder.count} | using: ${realCount}`);
+    if (dominantFunder && totalScrapedNonLP > 0) {
+      dominantFunder.ratio = dominantFunder.count / totalScrapedNonLP;
+      dominantFunder.totalScraped = totalScrapedNonLP;
+      dominantFunder.realCount = dominantFunder.count; // appearances in scraped sample
+      console.log(`[AnalyzeScrape] Dominant funder: ${dominantFunder.funder} | ${dominantFunder.count}/${totalScrapedNonLP} scraped rows (${(dominantFunder.ratio*100).toFixed(0)}%)`);
     }
 
     // ── Step 5: Helius funder enrichment for remaining wallets ────────────────
@@ -145,34 +142,46 @@ async function analyzeScrapedRoute(req, res) {
     // ── Step 6: Score ─────────────────────────────────────────────────────────
     const analysisResult = analyze(tokenData);
 
-    // ── Step 7: Score boost based on padre's authoritative cluster count ─────────
-    if (dominantFunder) {
-      const coordCount = dominantFunder.realCount || dominantFunder.maxClusterCount || dominantFunder.count;
+    // ── Step 7: Score boost based on funder appearance ratio ────────────────────
+    // Ratio of scraped rows sharing a funder is the most reliable signal we have.
+    // 50%+ = almost certainly a coordinated bundle across the full holder list.
+    if (dominantFunder && dominantFunder.ratio !== undefined) {
+      const ratio = dominantFunder.ratio;
+      const count = dominantFunder.count;
+      const scraped = dominantFunder.totalScraped;
 
-      if (coordCount >= 5) {
-        const boost = Math.min(coordCount * 1.5, 40);
-        analysisResult.score = Math.min(100, analysisResult.score + boost);
-        analysisResult.bars = analysisResult.score >= 85 ? 5 : analysisResult.score >= 65 ? 4 : analysisResult.score >= 40 ? 3 : analysisResult.score >= 20 ? 2 : 1;
+      if (ratio >= 0.5 && count >= 3) {
+        // High ratio = strong coordination signal
+        const severity = ratio >= 0.8 ? 'critical' : 'high';
+        const pct = (ratio * 100).toFixed(0);
 
-        const severity = coordCount >= 20 ? 'critical' : coordCount >= 10 ? 'high' : 'medium';
         analysisResult.flags.push({
-          text: `${coordCount} wallets coordinated by ${dominantFunder.funder}`,
+          text: `${count}/${scraped} sampled wallets funded by ${dominantFunder.funder} (${pct}% of sample)`,
           severity,
-          detail: `Padre detected ${coordCount} wallets funded together — coordinated bundle`
+          detail: `${pct}% of visible holders share one funder — coordinated bundle detected`
         });
 
-        if (coordCount >= 10) {
-          analysisResult.noBuy.push(`${coordCount} wallets coordinated by ${dominantFunder.funder}`);
+        if (ratio >= 0.8) {
+          analysisResult.noBuy.push(`${pct}% of wallets funded by same address — coordinated bundle`);
+          analysisResult.score = Math.max(analysisResult.score, 85);
+          analysisResult.bars = 5;
+          analysisResult.deathTrap = true;
+        } else if (ratio >= 0.5) {
+          analysisResult.noBuy.push(`${pct}% of wallets share funder ${dominantFunder.funder}`);
+          analysisResult.score = Math.max(analysisResult.score, 70);
+          analysisResult.bars = Math.max(analysisResult.bars, 4);
         }
 
-        // Death trap level if padre shows massive coordination
-        if (coordCount >= 25) {
-          analysisResult.score = Math.max(analysisResult.score, 90);
-          analysisResult.bars = 5;
-          if (!analysisResult.deathTrap) {
-            analysisResult.deathTrap = true;
-          }
-        }
+      } else if (count >= 5) {
+        // Lower ratio but significant count
+        analysisResult.flags.push({
+          text: `${count} wallets share funder ${dominantFunder.funder}`,
+          severity: count >= 10 ? 'high' : 'medium',
+          detail: `Multiple wallets funded by same source — possible coordination`
+        });
+        const boost = Math.min(count * 2, 20);
+        analysisResult.score = Math.min(100, analysisResult.score + boost);
+        analysisResult.bars = analysisResult.score >= 85 ? 5 : analysisResult.score >= 65 ? 4 : analysisResult.score >= 40 ? 3 : analysisResult.score >= 20 ? 2 : 1;
       }
     }
 
