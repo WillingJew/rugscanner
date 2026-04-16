@@ -35,8 +35,10 @@ const SYSTEM_ADDRS = new Set([
 ]);
 
 async function getTokenSupply(mint) {
-  const result = await rpc('getTokenSupply', [mint]);
-  return result?.value?.uiAmount || null;
+  const result = await rpc('getAccountInfo', [mint, { encoding: 'jsonParsed' }]);
+  return result?.value?.data?.parsed?.info?.supply
+    ? result.value.data.parsed.info.supply / Math.pow(10, result.value.data.parsed.info.decimals)
+    : null;
 }
 
 async function getTopHolders(mint) {
