@@ -16,6 +16,14 @@ async function rpc(method, params) {
   return data.result;
 }
 
+// Known DEX program IDs — these own LP token accounts
+const DEX_PROGRAMS = new Set([
+  '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM v4
+  'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C', // Raydium CPMM
+  'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',  // Orca Whirlpool
+  'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', // Raydium CLMM
+]);
+
 // System addresses that are never real funders
 const SYSTEM_ADDRS = new Set([
   '11111111111111111111111111111111',
@@ -28,7 +36,7 @@ const SYSTEM_ADDRS = new Set([
 
 async function getTokenSupply(mint) {
   const result = await rpc('getTokenSupply', [mint]);
-  return result?.value?.uiAmount || null;
+  return result?.value?.uiAmount ?? null;
 }
 
 async function getTopHolders(mint) {
@@ -48,6 +56,13 @@ async function getTopHolders(mint) {
     if (!cursor) break;
   }
   return all;
+}
+
+async function getAccountProgram(address) {
+  try {
+    const result = await rpc('getAccountInfo', [address, { encoding: 'base64' }]);
+    return result?.value?.owner || null;
+  } catch { return null; }
 }
 
 async function getSolBalance(address) {
@@ -104,7 +119,7 @@ async function analyzeToken(mint) {
     getTopHolders(mint)
   ]);
 
-  if (!supply) throw new Error('Could not fetch token supply. Is this a valid Solana token CA?');
+  if (supply === null) throw new Error('Could not fetch token supply. Is this a valid Solana token CA?');
   if (!accounts?.length) throw new Error('No holders found.');
 
   console.log('[Helius] Supply:', supply, '| Accounts:', accounts.length);
@@ -115,19 +130,27 @@ async function analyzeToken(mint) {
     .sort((a, b) => b.amount - a.amount)
     .slice(0, 25);
 
-  // Build holder list — LP is NOT marked here, scraper handles that via lpAddress
+  // Get program owners for LP detection (parallel)
+  const programs = await Promise.all(top25.map(a => getAccountProgram(a.owner)));
+
+  // Build holder list
   const holders = top25.map((account, i) => {
     const owner = account.owner;
     const amount = account.amount / Math.pow(10, account.decimals || 6);
     const pct = Math.round((amount / supply) * 10000) / 100;
+    const program = programs[i];
+    // Rank #1 is always the LP on Solana meme coins — it's always the largest holder
+    // If rank #1 has a funder address it means a real wallet holds more than LP = flagged separately
+    const isLP = i === 0 || DEX_PROGRAMS.has(program);
 
     return {
       rank: i + 1,
       address: owner,
       short: `${owner.slice(0,4)}...${owner.slice(-4)}`,
       percentage: pct,
-      isLP: false, // marked later in analyze-scraped.js using lpAddress from scraper
-      funder: null,
+      program,
+      isLP,
+      funder: null, // filled in during deep scan
       fundedAt: null,
     };
   });
