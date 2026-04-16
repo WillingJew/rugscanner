@@ -1,10 +1,10 @@
-// RugScanner Pro — Padre.gg Content Script v4
-// Confirmed working approach from live DOM investigation:
-//   - Holder rows use class css-1vec7k8
-//   - LP row uses class css-1kujlje with "LIQ POOL" text
+// RugScanner Pro — Padre.gg Content Script v5
+// LP detection approach:
+//   - parseHolderRows() identifies LP rank via "LIQ POOL" text in innerText
+//   - extractVisibleAddresses() captures LP row address via css-1kujlje class
+//   - lpAddress = addressMap[lpRow.rank] — no separate getLPAddress() needed
+//   - Regular holder rows use class css-1vec7k8
 //   - Full addresses are in React fiber memoizedProps.address
-//   - Row structure parsed from document.body.innerText
-//   - Percentages calculated from balance / totalBalance
 //   - Scrollable container has class "padre-no-scroll" (plain, no extra classes)
 
 const BACKEND_URL = 'https://your-railway-app.railway.app'; // TODO: replace
@@ -58,7 +58,7 @@ async function ensureHoldersTab() {
 function extractVisibleAddresses() {
   const map = {}; // rank -> address
 
-  // Regular holder rows (css-1vec7k8)
+  // Regular holder rows
   const rows = Array.from(document.querySelectorAll('*'))
     .filter(el => el.className?.includes?.('css-1vec7k8'));
   for (const el of rows) {
@@ -66,26 +66,18 @@ function extractVisibleAddresses() {
     if (data && data.rank > 0) map[data.rank] = data.address;
   }
 
+  // LP row — uses a different class (css-1kujlje) but same fiber address prop
+  const lpRows = Array.from(document.querySelectorAll('*'))
+    .filter(el => el.className?.includes?.('css-1kujlje'));
+  for (const el of lpRows) {
+    const data = getFiberAddress(el);
+    if (data && data.rank > 0) map[data.rank] = data.address;
+  }
+
   return map;
 }
 
-// ── Get LP address from the LIQ POOL row ─────────────────────────────────────
-function getLPAddress() {
-  const all = Array.from(document.querySelectorAll('*'));
-  // Find the element that displays "LIQ POOL" text
-  const liqEl = all.find(el => el.childElementCount === 0 && el.textContent.trim() === 'LIQ POOL');
-  if (!liqEl) return null;
 
-  // Walk up to find fiber with address (LP uses css-1kujlje container)
-  let el = liqEl;
-  for (let i = 0; i < 10; i++) {
-    const data = getFiberAddress(el);
-    if (data) return data.address;
-    el = el.parentElement;
-    if (!el) break;
-  }
-  return null;
-}
 
 // ── Parse innerText for row structure ────────────────────────────────────────
 // Each row in innerText: rank → truncAddr → balance → ...
@@ -128,11 +120,7 @@ async function scrapeHolders() {
   container.scrollTop = 0;
   await sleep(500);
 
-  // Collect LP address while rank 1-5 are visible
-  let lpAddress = getLPAddress();
-  if (lpAddress) console.log('[RugScanner] LP address captured at top:', lpAddress);
-
-  // Scroll through entire list collecting fiber addresses
+  // Scroll through entire list collecting fiber addresses (regular + LP rows)
   const addressMap = {};
   const stepSize = Math.floor(container.clientHeight * 0.55);
   let pos = 0, passes = 0;
@@ -141,8 +129,6 @@ async function scrapeHolders() {
 
   while (passes < 60) {
     Object.assign(addressMap, extractVisibleAddresses());
-    // Also retry LP capture in case it wasn't visible at top
-    if (!lpAddress) lpAddress = getLPAddress();
 
     const atBottom = pos >= container.scrollHeight - container.clientHeight - 5;
     if (atBottom) break;
@@ -154,28 +140,29 @@ async function scrapeHolders() {
   }
   // Final extract at bottom
   Object.assign(addressMap, extractVisibleAddresses());
-  if (!lpAddress) lpAddress = getLPAddress();
 
-  // Scroll back to top for innerText parse (innerText reflects visible content)
+  // Scroll back to top for innerText parse
   container.scrollTop = 0;
   await sleep(500);
 
-  // Parse row structure from innerText (now showing top rows)
+  // Parse row structure from innerText
   const rows = parseHolderRows();
   if (!rows || rows.length === 0) {
     throw new Error('Could not parse holder rows — is the Holders tab visible?');
   }
 
-  console.log(`[RugScanner] Parsed ${rows.length} rows | Addresses: ${Object.keys(addressMap).length} | LP: ${lpAddress || 'not found'}`);
+  // Derive LP address from the parsed rank + addressMap
+  // parseHolderRows() already identifies which rank has "LIQ POOL" label
+  const lpRow = rows.find(r => r.isLP);
+  const lpAddress = lpRow ? (addressMap[lpRow.rank] || null) : null;
+
+  console.log(`[RugScanner] Parsed ${rows.length} rows | Addresses: ${Object.keys(addressMap).length} | LP rank: ${lpRow?.rank ?? 'not found'} | LP addr: ${lpAddress || 'not found'}`);
 
   const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
   const holders = [];
 
   for (const row of rows) {
-    if (row.isLP) {
-      if (!lpAddress) lpAddress = addressMap[row.rank] || null;
-      continue;
-    }
+    if (row.isLP) continue; // excluded — lpAddress sent separately to backend
     holders.push({
       rank: row.rank,
       address: addressMap[row.rank] || `unknown_rank_${row.rank}`,
@@ -186,7 +173,7 @@ async function scrapeHolders() {
     });
   }
 
-  // Re-rank sequentially
+  // Re-rank sequentially after LP removed
   holders.sort((a, b) => a.rank - b.rank);
   holders.forEach((h, i) => { h.rank = i + 1; });
 
