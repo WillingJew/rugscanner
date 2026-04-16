@@ -1,196 +1,314 @@
-require('dotenv').config();
+// RugScanner Pro - Detection Engine
+// Clean implementation of Jack's bundle detection criteria
 
-function rpcUrl() {
-  return process.env.HELIUS_RPC_URL || 
-    `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
-}
+function analyze(tokenData) {
+  const { holders, holderCount } = tokenData;
+  const real = holders.filter(h => !h.isLP);
 
-async function rpc(method, params) {
-  const res = await fetch(rpcUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: method, method, params })
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(`Helius RPC error: ${data.error.message}`);
-  return data.result;
-}
+  const flags = [];
+  const noBuy = [];
+  let score = 0;
 
-// Known DEX program IDs — these own LP token accounts
-const DEX_PROGRAMS = new Set([
-  '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM v4
-  'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C', // Raydium CPMM
-  'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',  // Orca Whirlpool
-  'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', // Raydium CLMM
-]);
-
-// System addresses that are never real funders
-const SYSTEM_ADDRS = new Set([
-  '11111111111111111111111111111111',
-  'ComputeBudget111111111111111111111111111111',
-  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-  'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe8bv',
-  'SysvarRent111111111111111111111111111111111',
-  'SysvarC1ock11111111111111111111111111111111',
-]);
-
-async function getTokenSupply(mint) {
-  const result = await rpc('getTokenSupply', [mint]);
-  return result?.value?.uiAmount || null;
-}
-
-async function getTopHolders(mint) {
-  let all = [];
-  let cursor = null;
-  while (all.length < 5000) {
-    const body = { jsonrpc: '2.0', id: 'holders', method: 'getTokenAccounts',
-      params: { mint, limit: 1000, ...(cursor ? { cursor } : {}) } };
-    const res = await fetch(rpcUrl(), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
-    if (!data.result?.token_accounts?.length) break;
-    all = [...all, ...data.result.token_accounts];
-    cursor = data.result.cursor;
-    if (!cursor) break;
+  function flag(text, severity, detail = '') {
+    flags.push({ text, severity, detail });
   }
-  return all;
-}
 
-async function getAccountProgram(address) {
-  try {
-    const result = await rpc('getAccountInfo', [address, { encoding: 'base64' }]);
-    return result?.value?.owner || null;
-  } catch { return null; }
-}
+  // ── 1. LP NOT AT RANK 1 ──────────────────────────────────────────────────
+  const lp = holders.find(h => h.isLP);
+  if (lp && lp.rank !== 1) {
+    flag(`LP is not rank #1 — it's rank #${lp.rank}`, 'critical');
+    noBuy.push('LP is not #1 holder');
+    score += 40;
+  }
 
-async function getSolBalance(address) {
-  try {
-    const result = await rpc('getBalance', [address]);
-    return result?.value != null ? result.value / 1e9 : null; // lamports to SOL
-  } catch { return null; }
-}
+  // ── 2. DEATH TRAP — same funder across 90%+ of holders ──────────────────
+  const funderMap = {};
+  for (const h of real) {
+    if (!h.funder) continue;
+    funderMap[h.funder] = (funderMap[h.funder] || []);
+    funderMap[h.funder].push(h);
+  }
 
-async function getFunder(address) {
-  try {
-    // Get oldest transaction
-    const sigs = await rpc('getSignaturesForAddress', [address, { limit: 1000 }]);
-    if (!sigs?.length) return null;
-    const oldest = sigs[sigs.length - 1].signature;
+  const withFunder = real.filter(h => h.funder);
+  let deathTrap = false;
 
-    // Parse it
-    const tx = await rpc('getTransaction', [oldest, { 
-      encoding: 'jsonParsed', 
-      maxSupportedTransactionVersion: 0 
-    }]);
-    if (!tx) return null;
-
-    const accounts = tx.transaction?.message?.accountKeys || [];
-    const pre = tx.meta?.preBalances || [];
-    const post = tx.meta?.postBalances || [];
-
-    // Find who sent SOL — balance decreased, not system addr, not the wallet itself
-    for (let i = 0; i < accounts.length; i++) {
-      const pk = accounts[i]?.pubkey || accounts[i];
-      if (!pk || pk === address) continue;
-      if (SYSTEM_ADDRS.has(pk)) continue;
-      const decrease = (pre[i] || 0) - (post[i] || 0);
-      if (decrease >= 1000000) return pk; // at least 0.001 SOL sent
+  for (const [addr, group] of Object.entries(funderMap)) {
+    if (withFunder.length < 3) continue;
+    const ratio = group.length / withFunder.length;
+    if (ratio >= 0.9 && group.length >= 5) {
+      deathTrap = true;
+      const ranks = group.map(h => h.rank);
+      flag(
+        `Death trap: ${group.length}/${real.length} holders funded by same wallet`,
+        'critical',
+        `Ranks ${Math.min(...ranks)}-${Math.max(...ranks)} — one entity owns this coin`
+      );
+      noBuy.push(`${group.length} holders share one funder — death trap`);
+      score += 80;
+      break;
     }
-    return null;
-  } catch { return null; }
-}
-
-async function getWalletBirthTime(address) {
-  try {
-    const sigs = await rpc('getSignaturesForAddress', [address, { limit: 1000 }]);
-    if (!sigs?.length) return null;
-    const oldest = sigs[sigs.length - 1];
-    return oldest.blockTime || null; // unix timestamp
-  } catch { return null; }
-}
-
-async function analyzeToken(mint) {
-  console.log('[Helius] Analyzing', mint);
-
-  const [supply, accounts] = await Promise.all([
-    getTokenSupply(mint),
-    getTopHolders(mint)
-  ]);
-
-  if (!supply) throw new Error('Could not fetch token supply. Is this a valid Solana token CA?');
-  if (!accounts?.length) throw new Error('No holders found.');
-
-  console.log('[Helius] Supply:', supply, '| Accounts:', accounts.length);
-
-  // Sort by amount, take top 25
-  const top25 = accounts
-    .filter(a => a.amount > 0)
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, 25);
-
-  // Get program owners for LP detection (parallel)
-  const programs = await Promise.all(top25.map(a => getAccountProgram(a.owner)));
-
-  // Build holder list
-  const holders = top25.map((account, i) => {
-    const owner = account.owner;
-    const amount = account.amount / Math.pow(10, account.decimals || 6);
-    const pct = Math.round((amount / supply) * 10000) / 100;
-    const program = programs[i];
-    // Rank #1 is always the LP on Solana meme coins — it's always the largest holder
-    // If rank #1 has a funder address it means a real wallet holds more than LP = flagged separately
-    const isLP = i === 0 || DEX_PROGRAMS.has(program);
-
-    return {
-      rank: i + 1,
-      address: owner,
-      short: `${owner.slice(0,4)}...${owner.slice(-4)}`,
-      percentage: pct,
-      program,
-      isLP,
-      funder: null, // filled in during deep scan
-      fundedAt: null,
-    };
-  });
-
-  return { mint, supply, holderCount: accounts.length, holders };
-}
-
-async function enrichWithFunders(holders) {
-  // Only fetch for real (non-LP) top 15 holders
-  const targets = holders.filter(h => !h.isLP).slice(0, 15);
-  console.log('[Helius] Fetching funders + birth times for', targets.length, 'wallets...');
-
-  // Fetch funders and birth times in parallel
-  const [funderResults, birthResults] = await Promise.all([
-    Promise.allSettled(
-      targets.map(h => 
-        Promise.race([
-          getFunder(h.address),
-          new Promise(res => setTimeout(() => res(null), 8000))
-        ])
-      )
-    ),
-    Promise.allSettled(
-      targets.map(h => 
-        Promise.race([
-          getWalletBirthTime(h.address),
-          new Promise(res => setTimeout(() => res(null), 8000))
-        ])
-      )
-    )
-  ]);
-
-  for (let i = 0; i < targets.length; i++) {
-    const holder = holders.find(h => h.address === targets[i].address);
-    if (!holder) continue;
-    holder.funder = funderResults[i].status === 'fulfilled' ? funderResults[i].value : null;
-    holder.fundedAt = birthResults[i].status === 'fulfilled' ? birthResults[i].value : null;
   }
 
-  return holders;
+  // ── 3. FUNDER CLUSTERS (non-death-trap) ──────────────────────────────────
+  if (!deathTrap) {
+    for (const [addr, group] of Object.entries(funderMap)) {
+      if (group.length < 2) continue;
+      const totalPct = group.reduce((s, h) => s + h.percentage, 0);
+      const ranks = group.map(h => `#${h.rank}`).join(', ');
+
+      if (group.length >= 5 || totalPct >= 12) {
+        flag(`${group.length} wallets share funder — ${totalPct.toFixed(1)}% combined`, 'critical', `Ranks: ${ranks}`);
+        noBuy.push(`Funder cluster controls ${totalPct.toFixed(1)}%`);
+        score += 35;
+      } else if (totalPct >= 4) {
+        flag(`${group.length} wallets share funder — ${totalPct.toFixed(1)}% combined`, 'high', `Ranks: ${ranks}`);
+        score += 18;
+      } else {
+        flag(`${group.length} wallets share funder`, 'medium', `Ranks: ${ranks}`);
+        score += 8;
+      }
+    }
+  }
+
+   // ── 3b. CEX LABEL CLUSTERS ───────────────────────────────────────────────
+  // Wallets funded by different addresses but same CEX label (e.g. 6x "Coinbase")
+  const CEX_LABELS = ['coinbase', 'binance', 'kraken', 'okx', 'bybit', 'kucoin'];
+  const cexLabelMap = {};
+
+  for (const h of real) {
+    if (!h.funderLabel) continue;
+    const label = h.funderLabel.toLowerCase();
+    const match = CEX_LABELS.find(cex => label.includes(cex));
+    if (!match) continue;
+    if (!cexLabelMap[match]) cexLabelMap[match] = [];
+    cexLabelMap[match].push(h);
+  }
+
+  for (const [cex, group] of Object.entries(cexLabelMap)) {
+    if (group.length < 3) continue;
+    const totalPct = group.reduce((s, h) => s + h.percentage, 0);
+    const ranks = group.map(h => `#${h.rank}`).join(', ');
+    const label = cex.charAt(0).toUpperCase() + cex.slice(1);
+
+    if (group.length >= 5 || totalPct >= 15) {
+      flag(`${group.length} wallets all funded via ${label} — ${totalPct.toFixed(1)}% combined`, 'critical',
+        `Ranks: ${ranks} — CEX-sourced cluster, coordinated setup disguised as retail`);
+      noBuy.push(`${group.length} ${label}-funded wallets control ${totalPct.toFixed(1)}%`);
+      score += 35;
+    } else {
+      flag(`${group.length} wallets all funded via ${label} — ${totalPct.toFixed(1)}% combined`, 'high',
+        `Ranks: ${ranks} — same CEX funder across multiple wallets is suspicious`);
+      score += 20;
+    }
+  }
+  
+  // ── 4. INDIVIDUAL WALLET % ────────────────────────────────────────────────
+  for (const h of real) {
+    if (h.percentage >= 8) {
+      flag(`Rank #${h.rank} holds ${h.percentage.toFixed(1)}% — over 8%`, 'critical',
+        'Single wallet with this much control will dump on buyers');
+      noBuy.push(`Rank #${h.rank} holds ${h.percentage.toFixed(1)}%`);
+      score += 40;
+    } else if (h.percentage >= 4) {
+      flag(`Rank #${h.rank} holds ${h.percentage.toFixed(1)}% — over 4%`, 'high',
+        'Leverage risk — this wallet can move the chart');
+      score += 18;
+    }
+  }
+
+  // ── 5. IDENTICAL % GROUPS ─────────────────────────────────────────────────
+  const pctGroups = {};
+  for (const h of real) {
+    const key = h.percentage.toFixed(1);
+    pctGroups[key] = (pctGroups[key] || []);
+    pctGroups[key].push(h);
+  }
+ for (const [pct, group] of Object.entries(pctGroups)) {
+    if (group.length < 5) continue;
+
+    if (group.length >= 8) {
+      flag(`${group.length} wallets all hold exactly ${pct}% — identical holdings`, 'critical',
+        'Natural buying never creates perfect identical percentages — this is a bundle');
+      noBuy.push(`${group.length} wallets hold identical ${pct}% — coordinated bundle`);
+      score += 50;
+    } else if (group.length >= 5) {
+      flag(`${group.length} wallets all hold exactly ${pct}% — identical holdings`, 'high',
+        'Natural buying never creates perfect identical percentages');
+      score += 20;
+    }
+  }
+
+  // ── 6. SOL BALANCE UNIFORMITY ────────────────────────────────────────────
+  // Identical SOL balances across top holders = funded from same source
+  const withBal = real.filter(h => h.solBalance != null && h.solBalance > 0 && h.solBalance < 100);
+  if (withBal.length >= 4) {
+    // Group wallets within 0.005 SOL of each other (very tight — catches exact matches)
+    const sorted = [...withBal].sort((a, b) => a.solBalance - b.solBalance);
+    let bestGroup = [];
+    for (let i = 0; i < sorted.length; i++) {
+      const group = sorted.filter(h => Math.abs(h.solBalance - sorted[i].solBalance) <= 0.005);
+      if (group.length > bestGroup.length) bestGroup = group;
+    }
+
+    if (bestGroup.length >= 4) {
+      const avg = bestGroup.reduce((s, h) => s + h.solBalance, 0) / bestGroup.length;
+      const totalPct = bestGroup.reduce((s, h) => s + h.percentage, 0);
+      const ranks = bestGroup.map(h => `#${h.rank}`).join(', ');
+
+      if (bestGroup.length >= 8) {
+        flag(`${bestGroup.length} wallets all have identical SOL balance (${avg.toFixed(3)} SOL)`, 'critical',
+          `Ranks: ${ranks} — ${totalPct.toFixed(1)}% combined`);
+        noBuy.push(`${bestGroup.length} wallets share identical SOL balance`);
+        score += 35;
+      } else if (bestGroup.length >= 5) {
+        flag(`${bestGroup.length} wallets share identical SOL balance (${avg.toFixed(3)} SOL)`, 'high',
+          `Ranks: ${ranks} — ${totalPct.toFixed(1)}% combined`);
+        score += 20;
+      } else {
+        flag(`${bestGroup.length} wallets share identical SOL balance (${avg.toFixed(3)} SOL)`, 'medium',
+          `Ranks: ${ranks}`);
+        score += 10;
+      }
+    }
+  }
+
+  // ── 7. TOP HOLDER CONCENTRATION ──────────────────────────────────────────
+
+  // ── 6c. CLOCK BADGE DETECTION (scraped from Terminal UI) ─────────────────
+  // Terminal shows clock icons with numbers indicating how many wallets share a funder
+  // clockIconCount = how many rows had the icon, maxClockNumber = biggest group size
+  const clockIconCount = tokenData.clockIconCount || 0;
+  const maxClockNumber = tokenData.maxClockNumber || 0;
+
+  if (clockIconCount > 0 || maxClockNumber > 0) {
+    if (maxClockNumber >= 10) {
+      flag(`${maxClockNumber} accounts connected via same funder (Terminal clock badge)`, 'critical',
+        `${clockIconCount} rows flagged — Terminal detected coordinated funding across ${maxClockNumber} wallets`);
+      noBuy.push(`${maxClockNumber} wallets connected — coordinated bundle`);
+      score += 45;
+    } else if (clockIconCount >= 10) {
+      flag(`${clockIconCount} holders have clock badges — widespread funder connections`, 'critical',
+        `Largest connected group: ${maxClockNumber} wallets`);
+      noBuy.push(`${clockIconCount} holders flagged with funder connections`);
+      score += 40;
+    } else if (clockIconCount >= 4) {
+      flag(`${clockIconCount} holders have clock badges — funder connections detected`, 'high',
+        `Largest connected group: ${maxClockNumber} wallets`);
+      score += 20;
+    }
+  }
+
+  // ── 6d. SOFTWARE RUN DETECTION (scraped from Terminal UI) ────────────────
+  // Consecutive holders using the same trading software = possible coordinated bundle
+  // 4-6 in run top 10 = critical, below rank 10 = high, 7+ anywhere = critical
+  const softwareRuns = tokenData.softwareRuns || [];
+  for (const run of softwareRuns) {
+    const { software, startRank, endRank, count } = run;
+    const softwareLabel = software.charAt(0).toUpperCase() + software.slice(1);
+    
+    // Sum percentages of holders in this run
+    let totalPct = 0;
+    for (const r of run.ranks) {
+      const h = real.find(x => x.rank === r);
+      if (h) totalPct += h.percentage;
+    }
+    const pctLabel = totalPct > 0 ? ` — ${totalPct.toFixed(1)}% combined` : '';
+    
+    if (count >= 7) {
+      // 7+ in a run anywhere is absurd
+      flag(`${count} consecutive holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'critical',
+        `Same trading software across ${count} consecutive wallets${pctLabel} — strong bundle signal`);
+      noBuy.push(`${count} consecutive ${softwareLabel} wallets at ranks ${startRank}-${endRank}`);
+      score += 35;
+    } else if (startRank <= 10) {
+      // 4-6 in top 10 = critical
+      flag(`${count} consecutive top-10 holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'critical',
+        `Same trading software across ${count} consecutive top wallets${pctLabel}`);
+      noBuy.push(`${count} ${softwareLabel} wallets bundled in top 10 (ranks ${startRank}-${endRank})`);
+      score += 30;
+    } else {
+      // 4-6 below rank 10 = high
+      flag(`${count} consecutive holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'high',
+        `Same trading software across ${count} consecutive wallets${pctLabel}`);
+      score += 15;
+    }
+  }
+
+  // ── 6b. WALLET BIRTH TIME CLUSTERING ─────────────────────────────────────
+  // If many holders' wallets were created within the same 5-minute window = coordinated
+  const withBirth = real.filter(h => h.fundedAt != null);
+  if (withBirth.length >= 4) {
+    // Sort by birth time, then find the largest cluster within 300s (5 min)
+    const sorted = [...withBirth].sort((a, b) => a.fundedAt - b.fundedAt);
+    let bestCluster = [];
+
+    for (let i = 0; i < sorted.length; i++) {
+      const window = sorted.filter(h => h.fundedAt >= sorted[i].fundedAt && h.fundedAt <= sorted[i].fundedAt + 300);
+      if (window.length > bestCluster.length) bestCluster = window;
+    }
+
+    if (bestCluster.length >= 5) {
+      const totalPct = bestCluster.reduce((s, h) => s + h.percentage, 0);
+      const ranks = bestCluster.map(h => `#${h.rank}`).join(', ');
+      const spanSec = bestCluster[bestCluster.length - 1].fundedAt - bestCluster[0].fundedAt;
+      const spanLabel = spanSec < 60 ? `${spanSec}s` : `${Math.round(spanSec / 60)}m`;
+
+      if (bestCluster.length >= 8) {
+        flag(`${bestCluster.length} wallets all created within ${spanLabel} of each other`, 'critical',
+          `Ranks: ${ranks} — ${totalPct.toFixed(1)}% combined — coordinated wallet creation`);
+        noBuy.push(`${bestCluster.length} wallets born in same ${spanLabel} window — coordinated`);
+        score += 40;
+      } else {
+        flag(`${bestCluster.length} wallets created within ${spanLabel} of each other`, 'high',
+          `Ranks: ${ranks} — ${totalPct.toFixed(1)}% combined`);
+        score += 20;
+      }
+    }
+  }
+
+  const top5pct = real.slice(0, 5).reduce((s, h) => s + h.percentage, 0);
+  const top10pct = real.slice(0, 10).reduce((s, h) => s + h.percentage, 0);
+
+  if (top5pct >= 40) {
+    flag(`Top 5 holders control ${top5pct.toFixed(1)}%`, 'high');
+    score += 15;
+  }
+  if (top10pct >= 60) {
+    flag(`Top 10 holders control ${top10pct.toFixed(1)}%`, 'high');
+    score += 15;
+  }
+
+  // ── 7. STABILITY CREDIT FOR LARGE COINS ──────────────────────────────────
+  if (noBuy.length === 0 && holderCount >= 2000) score = Math.max(0, score - 15);
+  else if (noBuy.length === 0 && holderCount >= 1000) score = Math.max(0, score - 8);
+
+  // ── SCORE FLOORS ──────────────────────────────────────────────────────────
+  const crits = flags.filter(f => f.severity === 'critical').length;
+  if (deathTrap) score = Math.max(score, 95);
+  else if (crits >= 3) score = Math.max(score, 90);
+  else if (crits >= 2) score = Math.max(score, 80);
+  else if (crits >= 1) score = Math.max(score, 60);
+
+  score = Math.min(100, Math.max(0, score));
+
+  const bars = score >= 85 ? 5 : score >= 65 ? 4 : score >= 40 ? 3 : score >= 20 ? 2 : 1;
+
+  // ── STATS FOR UI ──────────────────────────────────────────────────────────
+  const funderClusters = Object.values(funderMap).filter(g => g.length >= 2).length;
+  const topHolder = real[0];
+
+  return {
+    score,
+    bars,
+    flags,
+    noBuy,
+    holderCount,
+    deathTrap,
+    stats: {
+      topHolderPct: topHolder?.percentage ?? null,
+      funderClusters,
+    }
+  };
 }
 
-module.exports = { analyzeToken, enrichWithFunders, getTokenSupply, getWalletBirthTime };
+module.exports = { analyze };
