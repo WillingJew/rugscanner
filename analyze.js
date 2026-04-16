@@ -198,6 +198,42 @@ function analyze(tokenData) {
     }
   }
 
+  // ── 6d. SOFTWARE RUN DETECTION (scraped from Terminal UI) ────────────────
+  // Consecutive holders using the same trading software = possible coordinated bundle
+  // 4-6 in run top 10 = critical, below rank 10 = high, 7+ anywhere = critical
+  const softwareRuns = tokenData.softwareRuns || [];
+  for (const run of softwareRuns) {
+    const { software, startRank, endRank, count } = run;
+    const softwareLabel = software.charAt(0).toUpperCase() + software.slice(1);
+    
+    // Sum percentages of holders in this run
+    let totalPct = 0;
+    for (const r of run.ranks) {
+      const h = real.find(x => x.rank === r);
+      if (h) totalPct += h.percentage;
+    }
+    const pctLabel = totalPct > 0 ? ` — ${totalPct.toFixed(1)}% combined` : '';
+    
+    if (count >= 7) {
+      // 7+ in a run anywhere is absurd
+      flag(`${count} consecutive holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'critical',
+        `Same trading software across ${count} consecutive wallets${pctLabel} — strong bundle signal`);
+      noBuy.push(`${count} consecutive ${softwareLabel} wallets at ranks ${startRank}-${endRank}`);
+      score += 35;
+    } else if (startRank <= 10) {
+      // 4-6 in top 10 = critical
+      flag(`${count} consecutive top-10 holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'critical',
+        `Same trading software across ${count} consecutive top wallets${pctLabel}`);
+      noBuy.push(`${count} ${softwareLabel} wallets bundled in top 10 (ranks ${startRank}-${endRank})`);
+      score += 30;
+    } else {
+      // 4-6 below rank 10 = high
+      flag(`${count} consecutive holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'high',
+        `Same trading software across ${count} consecutive wallets${pctLabel}`);
+      score += 15;
+    }
+  }
+
   // ── 6b. WALLET BIRTH TIME CLUSTERING ─────────────────────────────────────
   // If many holders' wallets were created within the same 5-minute window = coordinated
   const withBirth = real.filter(h => h.fundedAt != null);
