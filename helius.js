@@ -35,13 +35,15 @@ const SYSTEM_ADDRS = new Set([
 ]);
 
 async function getTokenSupply(mint) {
-  const result = await rpc('getParsedAccountInfo', [mint]);
-  console.log('[Helius] parsed info:', JSON.stringify(result?.value?.data?.parsed?.info).slice(0, 100));
-  const info = result?.value?.data?.parsed?.info;
-  if (!info) return null;
-  const supply = parseFloat(info.supply);
-  const decimals = info.decimals || 6;
-  return supply / Math.pow(10, decimals);
+  // Use public Solana RPC as fallback for getTokenSupply
+  const res = await fetch('https://api.mainnet-beta.solana.com', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 'supply', method: 'getTokenSupply', params: [mint] })
+  });
+  const data = await res.json();
+  if (data.error) return null;
+  return data.result?.value?.uiAmount ?? null;
 }
 
 async function getTopHolders(mint) {
