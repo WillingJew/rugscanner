@@ -34,16 +34,21 @@ const SYSTEM_ADDRS = new Set([
   'SysvarC1ock11111111111111111111111111111111',
 ]);
 
+async function getTokenMintFromPool(poolAddress) {
+  try {
+    const result = await rpc('getAccountInfo', [poolAddress, { encoding: 'jsonParsed' }]);
+    const data = result?.value?.data;
+    if (data?.parsed?.info?.mint) return data.parsed.info.mint;
+    if (data?.parsed?.info?.baseMint) return data.parsed.info.baseMint;
+    if (data?.parsed?.info?.tokenMint) return data.parsed.info.tokenMint;
+    // Try raw base64 — look for token accounts in the account data
+    return null;
+  } catch { return null; }
+}
+
 async function getTokenSupply(mint) {
-  const res = await fetch('https://api.mainnet-beta.solana.com', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 'supply', method: 'getTokenSupply', params: [mint] })
-  });
-  const data = await res.json();
-  console.log('[Helius] supply response:', JSON.stringify(data).slice(0, 200));
-  if (data.error) return null;
-  return data.result?.value?.uiAmount ?? null;
+  const result = await rpc('getTokenSupply', [mint]);
+  return result?.value?.uiAmount || null;
 }
 
 async function getTopHolders(mint) {
@@ -119,30 +124,37 @@ async function getWalletBirthTime(address) {
 }
 
 async function analyzeToken(mint) {
-  mint = mint.trim();
   console.log('[Helius] Analyzing', mint);
 
-  const accounts = await getTopHolders(mint);
+  const [supply, accounts] = await Promise.all([
+    getTokenSupply(mint),
+    getTopHolders(mint)
+  ]);
 
-  if (!accounts?.length) throw new Error('No holders found for this token.');
+  if (!supply) throw new Error('Could not fetch token supply. Is this a valid Solana token CA?');
+  if (!accounts?.length) throw new Error('No holders found.');
 
-  console.log('[Helius] Accounts:', accounts.length);
+  console.log('[Helius] Supply:', supply, '| Accounts:', accounts.length);
 
-  const totalSupply = accounts.reduce((s, a) => s + (a.amount || 0), 0);
-
+  // Sort by amount, take top 25
   const top25 = accounts
     .filter(a => a.amount > 0)
     .sort((a, b) => b.amount - a.amount)
     .slice(0, 25);
 
+  // Get program owners for LP detection (parallel)
   const programs = await Promise.all(top25.map(a => getAccountProgram(a.owner)));
 
+  // Build holder list
   const holders = top25.map((account, i) => {
     const owner = account.owner;
-    const amount = account.amount;
-    const pct = totalSupply > 0 ? Math.round((amount / totalSupply) * 10000) / 100 : 0;
+    const amount = account.amount / Math.pow(10, account.decimals || 6);
+    const pct = Math.round((amount / supply) * 10000) / 100;
     const program = programs[i];
+    // Rank #1 is always the LP on Solana meme coins — it's always the largest holder
+    // If rank #1 has a funder address it means a real wallet holds more than LP = flagged separately
     const isLP = i === 0 || DEX_PROGRAMS.has(program);
+
     return {
       rank: i + 1,
       address: owner,
@@ -150,13 +162,14 @@ async function analyzeToken(mint) {
       percentage: pct,
       program,
       isLP,
-      funder: null,
+      funder: null, // filled in during deep scan
       fundedAt: null,
     };
   });
 
-  return { mint, supply: totalSupply, holderCount: accounts.length, holders };
+  return { mint, supply, holderCount: accounts.length, holders };
 }
+
 async function enrichWithFunders(holders) {
   // Only fetch for real (non-LP) top 15 holders
   const targets = holders.filter(h => !h.isLP).slice(0, 15);
@@ -192,4 +205,4 @@ async function enrichWithFunders(holders) {
   return holders;
 }
 
-module.exports = { analyzeToken, enrichWithFunders, getTokenSupply, getWalletBirthTime };
+module.exports = { analyzeToken, enrichWithFunders, getTokenSupply, getWalletBirthTime, getTokenMintFromPool };
