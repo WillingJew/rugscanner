@@ -141,7 +141,7 @@ async function analyzeToken(mint) {
     const program = programs[i];
     // Rank #1 is always the LP on Solana meme coins — it's always the largest holder
     // If rank #1 has a funder address it means a real wallet holds more than LP = flagged separately
-    const isLP = i === 0 || DEX_PROGRAMS.has(program);
+  const isLP = DEX_PROGRAMS.has(program);
 
     return {
       rank: i + 1,
