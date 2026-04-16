@@ -36,7 +36,7 @@ const SYSTEM_ADDRS = new Set([
 
 async function getTokenSupply(mint) {
   const result = await rpc('getTokenSupply', [mint]);
- return result?.value?.uiAmount ?? null;
+  return result?.value?.uiAmount || null;
 }
 
 async function getTopHolders(mint) {
@@ -119,7 +119,7 @@ async function analyzeToken(mint) {
     getTopHolders(mint)
   ]);
 
- if (supply === null || supply === undefined) throw new Error('Could not fetch token supply. Is this a valid Solana token CA?');
+  if (!supply) throw new Error('Could not fetch token supply. Is this a valid Solana token CA?');
   if (!accounts?.length) throw new Error('No holders found.');
 
   console.log('[Helius] Supply:', supply, '| Accounts:', accounts.length);
