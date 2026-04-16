@@ -3,6 +3,16 @@
 
 function analyze(tokenData) {
   const { holders, holderCount } = tokenData;
+
+  // Safety net: if no holder was marked as LP (scraper missed it), mark rank #1.
+  // This prevents the LP from ever being counted as a real holder.
+  const hasLP = holders.some(h => h.isLP);
+  if (!hasLP) {
+    console.warn('[Analyze] No LP marked — defaulting rank #1 to LP');
+    const rank1 = holders.find(h => h.rank === 1);
+    if (rank1) rank1.isLP = true;
+  }
+
   const real = holders.filter(h => !h.isLP);
 
   const flags = [];
@@ -13,8 +23,7 @@ function analyze(tokenData) {
     flags.push({ text, severity, detail });
   }
 
-
-  // ── 2. DEATH TRAP — same funder across 90%+ of holders ──────────────────
+  // ── 1. DEATH TRAP — same funder across 90%+ of holders ──────────────────
   const funderMap = {};
   for (const h of real) {
     if (!h.funder) continue;
