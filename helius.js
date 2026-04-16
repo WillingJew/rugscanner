@@ -119,37 +119,30 @@ async function getWalletBirthTime(address) {
 }
 
 async function analyzeToken(mint) {
+  mint = mint.trim();
   console.log('[Helius] Analyzing', mint);
 
-  const [supply, accounts] = await Promise.all([
-    getTokenSupply(mint),
-    getTopHolders(mint)
-  ]);
+  const accounts = await getTopHolders(mint);
 
-  if (!supply) throw new Error('Could not fetch token supply. Is this a valid Solana token CA?');
-  if (!accounts?.length) throw new Error('No holders found.');
+  if (!accounts?.length) throw new Error('No holders found for this token.');
 
-  console.log('[Helius] Supply:', supply, '| Accounts:', accounts.length);
+  console.log('[Helius] Accounts:', accounts.length);
 
-  // Sort by amount, take top 25
+  const totalSupply = accounts.reduce((s, a) => s + (a.amount || 0), 0);
+
   const top25 = accounts
     .filter(a => a.amount > 0)
     .sort((a, b) => b.amount - a.amount)
     .slice(0, 25);
 
-  // Get program owners for LP detection (parallel)
   const programs = await Promise.all(top25.map(a => getAccountProgram(a.owner)));
 
-  // Build holder list
   const holders = top25.map((account, i) => {
     const owner = account.owner;
-    const amount = account.amount / Math.pow(10, account.decimals || 6);
-    const pct = Math.round((amount / supply) * 10000) / 100;
+    const amount = account.amount;
+    const pct = totalSupply > 0 ? Math.round((amount / totalSupply) * 10000) / 100 : 0;
     const program = programs[i];
-    // Rank #1 is always the LP on Solana meme coins — it's always the largest holder
-    // If rank #1 has a funder address it means a real wallet holds more than LP = flagged separately
     const isLP = i === 0 || DEX_PROGRAMS.has(program);
-
     return {
       rank: i + 1,
       address: owner,
@@ -157,14 +150,13 @@ async function analyzeToken(mint) {
       percentage: pct,
       program,
       isLP,
-      funder: null, // filled in during deep scan
+      funder: null,
       fundedAt: null,
     };
   });
 
-  return { mint, supply, holderCount: accounts.length, holders };
+  return { mint, supply: totalSupply, holderCount: accounts.length, holders };
 }
-
 async function enrichWithFunders(holders) {
   // Only fetch for real (non-LP) top 15 holders
   const targets = holders.filter(h => !h.isLP).slice(0, 15);
