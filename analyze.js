@@ -13,13 +13,6 @@ function analyze(tokenData) {
     flags.push({ text, severity, detail });
   }
 
-  // ── 1. LP NOT AT RANK 1 ──────────────────────────────────────────────────
-  const lp = holders.find(h => h.isLP);
-  if (lp && lp.rank !== 1) {
-    flag(`LP is not rank #1 — it's rank #${lp.rank}`, 'critical');
-    noBuy.push('LP is not #1 holder');
-    score += 40;
-  }
 
   // ── 2. DEATH TRAP — same funder across 90%+ of holders ──────────────────
   const funderMap = {};
