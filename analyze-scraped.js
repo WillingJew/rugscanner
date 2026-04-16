@@ -51,10 +51,24 @@ async function analyzeScrapedRoute(req, res) {
     const tokenData = await analyzeToken(ca);
 
     // Step 2: Mark LP using padre-scraped address
+    // Scraper finds the "LIQ POOL" labeled row — that address is the source of truth.
+    // Fallback to rank #1 only if address wasn't found in Helius holder list.
     if (lpAddress) {
-      for (const h of tokenData.holders) {
-        if (h.address === lpAddress) { h.isLP = true; break; }
+      const lpHolder = tokenData.holders.find(h => h.address === lpAddress);
+      if (lpHolder) {
+        lpHolder.isLP = true;
+        console.log(`[AnalyzeScrape] LP marked at rank #${lpHolder.rank} via scraped address`);
+      } else {
+        // LP address from scraper didn't appear in top 25 — mark rank #1 as fallback
+        console.warn('[AnalyzeScrape] LP address not found in holder list — falling back to rank #1');
+        const rank1 = tokenData.holders.find(h => h.rank === 1);
+        if (rank1) rank1.isLP = true;
       }
+    } else {
+      // Scraper found no LIQ POOL label — mark rank #1 as fallback
+      console.warn('[AnalyzeScrape] No LP address scraped — falling back to rank #1');
+      const rank1 = tokenData.holders.find(h => h.rank === 1);
+      if (rank1) rank1.isLP = true;
     }
 
     // Step 3: Funder enrichment
