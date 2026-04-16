@@ -1,7 +1,4 @@
 // analyze-scraped.js
-// Receives: ca, lpAddress, mode
-// Helius fetches real holder data, marks LP, scores, optional AI verdict
-
 const { analyzeToken, enrichWithFunders } = require('./helius');
 const { analyze } = require('./analyze');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -39,32 +36,30 @@ Rules:
 }
 
 async function analyzeScrapedRoute(req, res) {
-  const { ca, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
+  const { ca, lpAddress, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
   const runAI = mode === 'ai';
 
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
 
-  console.log(`[AnalyzeScrape] CA: ${ca} | mode: ${mode}`);
+  console.log(`[AnalyzeScrape] CA: ${ca} | LP: ${lpAddress || 'none'} | mode: ${mode}`);
 
   try {
-    // Step 1: Helius — real holder data
     const tokenData = await analyzeToken(ca);
 
-    // Step 2: LP is already stripped by the scraper via "LIQ POOL" innerText detection.
-    // analyze.js safety net handles any edge case where no LP is marked.
+    if (lpAddress) {
+      for (const h of tokenData.holders) {
+        if (h.address === lpAddress) { h.isLP = true; break; }
+      }
+    }
 
-    // Step 3: Funder enrichment
     await enrichWithFunders(tokenData.holders);
 
-    // Step 3b: Attach scraped clock badge data and software runs
     tokenData.clockIconCount = clockIconCount || 0;
     tokenData.maxClockNumber = maxClockNumber || 0;
     tokenData.softwareRuns = softwareRuns || [];
 
-    // Step 4: Score
     const analysisResult = analyze(tokenData);
 
-    // Step 5: AI verdict
     let verdict = null;
     if (runAI) {
       try {
@@ -76,6 +71,7 @@ async function analyzeScrapedRoute(req, res) {
 
     return res.json({
       ca,
+      lpAddress: lpAddress || null,
       score: analysisResult.score,
       bars: analysisResult.bars,
       flags: analysisResult.flags,
