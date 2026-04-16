@@ -1,10 +1,10 @@
-// RugScanner Pro — Padre.gg Content Script v5
-// LP detection approach:
-//   - parseHolderRows() identifies LP rank via "LIQ POOL" text in innerText
-//   - extractVisibleAddresses() captures LP row address via css-1kujlje class
-//   - lpAddress = addressMap[lpRow.rank] — no separate getLPAddress() needed
-//   - Regular holder rows use class css-1vec7k8
+// RugScanner Pro — Padre.gg Content Script v4
+// Confirmed working approach from live DOM investigation:
+//   - Holder rows use class css-1vec7k8
+//   - LP row uses class css-1kujlje with "LIQ POOL" text
 //   - Full addresses are in React fiber memoizedProps.address
+//   - Row structure parsed from document.body.innerText
+//   - Percentages calculated from balance / totalBalance
 //   - Scrollable container has class "padre-no-scroll" (plain, no extra classes)
 
 const BACKEND_URL = 'https://your-railway-app.railway.app'; // TODO: replace
@@ -58,7 +58,7 @@ async function ensureHoldersTab() {
 function extractVisibleAddresses() {
   const map = {}; // rank -> address
 
-  // Regular holder rows
+  // Regular holder rows (css-1vec7k8)
   const rows = Array.from(document.querySelectorAll('*'))
     .filter(el => el.className?.includes?.('css-1vec7k8'));
   for (const el of rows) {
@@ -66,17 +66,8 @@ function extractVisibleAddresses() {
     if (data && data.rank > 0) map[data.rank] = data.address;
   }
 
-  // LP row — uses a different class (css-1kujlje) but same fiber address prop
-  const lpRows = Array.from(document.querySelectorAll('*'))
-    .filter(el => el.className?.includes?.('css-1kujlje'));
-  for (const el of lpRows) {
-    const data = getFiberAddress(el);
-    if (data && data.rank > 0) map[data.rank] = data.address;
-  }
-
   return map;
 }
-
 
 
 // ── Parse innerText for row structure ────────────────────────────────────────
@@ -120,7 +111,7 @@ async function scrapeHolders() {
   container.scrollTop = 0;
   await sleep(500);
 
-  // Scroll through entire list collecting fiber addresses (regular + LP rows)
+  // Scroll through entire list collecting fiber addresses
   const addressMap = {};
   const stepSize = Math.floor(container.clientHeight * 0.55);
   let pos = 0, passes = 0;
@@ -146,23 +137,21 @@ async function scrapeHolders() {
   await sleep(500);
 
   // Parse row structure from innerText
+  // parseHolderRows() detects "LIQ POOL" text and marks isLP: true on that rank
   const rows = parseHolderRows();
   if (!rows || rows.length === 0) {
     throw new Error('Could not parse holder rows — is the Holders tab visible?');
   }
 
-  // Derive LP address from the parsed rank + addressMap
-  // parseHolderRows() already identifies which rank has "LIQ POOL" label
   const lpRow = rows.find(r => r.isLP);
-  const lpAddress = lpRow ? (addressMap[lpRow.rank] || null) : null;
-
-  console.log(`[RugScanner] Parsed ${rows.length} rows | Addresses: ${Object.keys(addressMap).length} | LP rank: ${lpRow?.rank ?? 'not found'} | LP addr: ${lpAddress || 'not found'}`);
+  console.log(`[RugScanner] Parsed ${rows.length} rows | Addresses: ${Object.keys(addressMap).length} | LP rank: ${lpRow?.rank ?? 'not found'}`);
 
   const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
   const holders = [];
 
   for (const row of rows) {
-    if (row.isLP) continue; // excluded — lpAddress sent separately to backend
+    // Skip LP row entirely — identified by "LIQ POOL" text in innerText
+    if (row.isLP) continue;
     holders.push({
       rank: row.rank,
       address: addressMap[row.rank] || `unknown_rank_${row.rank}`,
@@ -177,7 +166,7 @@ async function scrapeHolders() {
   holders.sort((a, b) => a.rank - b.rank);
   holders.forEach((h, i) => { h.rank = i + 1; });
 
-  return { holders, lpAddress, holderCount: rows.length };
+  return { holders, holderCount: rows.length };
 }
 
 // ── Run scan ──────────────────────────────────────────────────────────────────
@@ -186,13 +175,13 @@ async function runScan(authToken) {
   if (!ca) throw new Error('Could not detect token CA — are you on a token page?');
   console.log('[RugScanner] Scanning CA:', ca);
 
-  const { holders, lpAddress, holderCount } = await scrapeHolders();
+  const { holders, holderCount } = await scrapeHolders();
   if (holders.length === 0) throw new Error('No holders found');
 
   const response = await fetch(`${BACKEND_URL}/analyze-scraped`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-    body: JSON.stringify({ ca, lpAddress, holders, holderCount, source: 'padre_scrape_v4' }),
+    body: JSON.stringify({ ca, holders, holderCount, source: 'padre_scrape_v4' }),
   });
 
   if (!response.ok) throw new Error(`Backend error ${response.status}: ${await response.text()}`);
