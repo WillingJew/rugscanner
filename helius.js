@@ -112,8 +112,9 @@ async function getWalletBirthTime(address) {
 }
 
 async function analyzeToken(mint) {
-  console.log('[Helius] Analyzing', mint);
-
+  mint = mint.trim();
+  console.log('[Helius] Analyzing', mint, '| length:', mint.length);
+  
   const [supply, accounts] = await Promise.all([
     getTokenSupply(mint),
     getTopHolders(mint)
