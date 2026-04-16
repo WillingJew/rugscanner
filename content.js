@@ -7,7 +7,7 @@
 //   - Percentages calculated from balance / totalBalance
 //   - Scrollable container has class "padre-no-scroll" (plain, no extra classes)
 
-const BACKEND_URL = 'https://your-railway-app.railway.app'; // TODO: replace
+const BACKEND_URL = 'https://rugscanner-production-1a92.up.railway.app';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -38,7 +38,6 @@ function getFiberAddress(el) {
 
 // ── Find the holder list scroll container ────────────────────────────────────
 function findScrollContainer() {
-  // The holders list uses a plain .padre-no-scroll div (no extra MUI classes)
   return Array.from(document.querySelectorAll('.padre-no-scroll'))
     .filter(el => el.className.trim() === 'padre-no-scroll')[0] || null;
 }
@@ -56,23 +55,32 @@ async function ensureHoldersTab() {
 
 // ── Extract addresses from currently visible holder rows ──────────────────────
 function extractVisibleAddresses() {
-  const map = {}; // rank -> address
-
-  // Regular holder rows (css-1vec7k8)
+  const map = {};
   const rows = Array.from(document.querySelectorAll('*'))
     .filter(el => el.className?.includes?.('css-1vec7k8'));
   for (const el of rows) {
     const data = getFiberAddress(el);
     if (data && data.rank > 0) map[data.rank] = data.address;
   }
-
   return map;
 }
 
+// ── Get LP address from the LIQ POOL row ─────────────────────────────────────
+function getLPAddress() {
+  const all = Array.from(document.querySelectorAll('*'));
+  const liqEl = all.find(el => el.childElementCount === 0 && el.textContent.trim() === 'LIQ POOL');
+  if (!liqEl) return null;
+  let el = liqEl;
+  for (let i = 0; i < 10; i++) {
+    const data = getFiberAddress(el);
+    if (data) return data.address;
+    el = el.parentElement;
+    if (!el) break;
+  }
+  return null;
+}
 
 // ── Parse innerText for row structure ────────────────────────────────────────
-// Each row in innerText: rank → truncAddr → balance → ...
-// Detection: a line matching /^\d+$/ followed by a truncated address or "LIQ POOL"
 function parseHolderRows() {
   const text = document.body.innerText;
   const headerIdx = text.indexOf('Rank\nAddress\nBalance');
@@ -107,11 +115,12 @@ async function scrapeHolders() {
   const container = findScrollContainer();
   if (!container) throw new Error('Holder list scroll container not found');
 
-  // Scroll to top
   container.scrollTop = 0;
   await sleep(500);
 
-  // Scroll through entire list collecting fiber addresses
+  let lpAddress = getLPAddress();
+  if (lpAddress) console.log('[RugScanner] LP address captured at top:', lpAddress);
+
   const addressMap = {};
   const stepSize = Math.floor(container.clientHeight * 0.55);
   let pos = 0, passes = 0;
@@ -120,38 +129,35 @@ async function scrapeHolders() {
 
   while (passes < 60) {
     Object.assign(addressMap, extractVisibleAddresses());
-
+    if (!lpAddress) lpAddress = getLPAddress();
     const atBottom = pos >= container.scrollHeight - container.clientHeight - 5;
     if (atBottom) break;
-
     pos = Math.min(pos + stepSize, container.scrollHeight);
     container.scrollTop = pos;
     await sleep(200);
     passes++;
   }
-  // Final extract at bottom
   Object.assign(addressMap, extractVisibleAddresses());
+  if (!lpAddress) lpAddress = getLPAddress();
 
-  // Scroll back to top for innerText parse
   container.scrollTop = 0;
   await sleep(500);
 
-  // Parse row structure from innerText
-  // parseHolderRows() detects "LIQ POOL" text and marks isLP: true on that rank
   const rows = parseHolderRows();
   if (!rows || rows.length === 0) {
     throw new Error('Could not parse holder rows — is the Holders tab visible?');
   }
 
-  const lpRow = rows.find(r => r.isLP);
-  console.log(`[RugScanner] Parsed ${rows.length} rows | Addresses: ${Object.keys(addressMap).length} | LP rank: ${lpRow?.rank ?? 'not found'}`);
+  console.log(`[RugScanner] Parsed ${rows.length} rows | Addresses: ${Object.keys(addressMap).length} | LP: ${lpAddress || 'not found'}`);
 
   const totalBalance = rows.reduce((s, r) => s + r.balance, 0);
   const holders = [];
 
   for (const row of rows) {
-    // Skip LP row entirely — identified by "LIQ POOL" text in innerText
-    if (row.isLP) continue;
+    if (row.isLP) {
+      if (!lpAddress) lpAddress = addressMap[row.rank] || null;
+      continue;
+    }
     holders.push({
       rank: row.rank,
       address: addressMap[row.rank] || `unknown_rank_${row.rank}`,
@@ -162,26 +168,25 @@ async function scrapeHolders() {
     });
   }
 
-  // Re-rank sequentially after LP removed
   holders.sort((a, b) => a.rank - b.rank);
   holders.forEach((h, i) => { h.rank = i + 1; });
 
-  return { holders, holderCount: rows.length };
+  return { holders, lpAddress, holderCount: rows.length };
 }
 
 // ── Run scan ──────────────────────────────────────────────────────────────────
-async function runScan(authToken) {
+async function runScan(authToken, mode) {
   const ca = getTokenCA();
   if (!ca) throw new Error('Could not detect token CA — are you on a token page?');
   console.log('[RugScanner] Scanning CA:', ca);
 
-  const { holders, holderCount } = await scrapeHolders();
+  const { holders, lpAddress, holderCount } = await scrapeHolders();
   if (holders.length === 0) throw new Error('No holders found');
 
   const response = await fetch(`${BACKEND_URL}/analyze-scraped`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-    body: JSON.stringify({ ca, holders, holderCount, source: 'padre_scrape_v4' }),
+    body: JSON.stringify({ ca, lpAddress, mode, holderCount, source: 'padre_scrape_v4' }),
   });
 
   if (!response.ok) throw new Error(`Backend error ${response.status}: ${await response.text()}`);
@@ -190,8 +195,9 @@ async function runScan(authToken) {
 
 // ── Message listener ──────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'PING') { sendResponse({ pong: true }); return; }
   if (message.type === 'SCAN_TOKEN') {
-    runScan(message.authToken)
+    runScan(message.authToken, message.mode)
       .then(result => sendResponse({ success: true, result }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
