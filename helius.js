@@ -35,13 +35,13 @@ const SYSTEM_ADDRS = new Set([
 ]);
 
 async function getTokenSupply(mint) {
-  // Use public Solana RPC as fallback for getTokenSupply
   const res = await fetch('https://api.mainnet-beta.solana.com', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 'supply', method: 'getTokenSupply', params: [mint] })
   });
   const data = await res.json();
+  console.log('[Helius] supply response:', JSON.stringify(data).slice(0, 200));
   if (data.error) return null;
   return data.result?.value?.uiAmount ?? null;
 }
