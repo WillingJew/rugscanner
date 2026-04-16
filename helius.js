@@ -35,8 +35,8 @@ const SYSTEM_ADDRS = new Set([
 ]);
 
 async function getTokenSupply(mint) {
-  const result = await rpc('getAccountInfo', [mint, { encoding: 'jsonParsed' }]);
-  console.log('[Helius] getAccountInfo result:', JSON.stringify(result?.value?.data).slice(0, 200));
+  const result = await rpc('getParsedAccountInfo', [mint]);
+  console.log('[Helius] parsed info:', JSON.stringify(result?.value?.data?.parsed?.info).slice(0, 100));
   const info = result?.value?.data?.parsed?.info;
   if (!info) return null;
   const supply = parseFloat(info.supply);
