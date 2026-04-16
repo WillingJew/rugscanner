@@ -39,37 +39,19 @@ Rules:
 }
 
 async function analyzeScrapedRoute(req, res) {
-  const { ca, lpAddress, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
+  const { ca, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
   const runAI = mode === 'ai';
 
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
 
-  console.log(`[AnalyzeScrape] CA: ${ca} | LP: ${lpAddress || 'none'} | mode: ${mode}`);
+  console.log(`[AnalyzeScrape] CA: ${ca} | mode: ${mode}`);
 
   try {
     // Step 1: Helius — real holder data
     const tokenData = await analyzeToken(ca);
 
-    // Step 2: Mark LP using padre-scraped address
-    // Scraper finds the "LIQ POOL" labeled row — that address is the source of truth.
-    // Fallback to rank #1 only if address wasn't found in Helius holder list.
-    if (lpAddress) {
-      const lpHolder = tokenData.holders.find(h => h.address === lpAddress);
-      if (lpHolder) {
-        lpHolder.isLP = true;
-        console.log(`[AnalyzeScrape] LP marked at rank #${lpHolder.rank} via scraped address`);
-      } else {
-        // LP address from scraper didn't appear in top 25 — mark rank #1 as fallback
-        console.warn('[AnalyzeScrape] LP address not found in holder list — falling back to rank #1');
-        const rank1 = tokenData.holders.find(h => h.rank === 1);
-        if (rank1) rank1.isLP = true;
-      }
-    } else {
-      // Scraper found no LIQ POOL label — mark rank #1 as fallback
-      console.warn('[AnalyzeScrape] No LP address scraped — falling back to rank #1');
-      const rank1 = tokenData.holders.find(h => h.rank === 1);
-      if (rank1) rank1.isLP = true;
-    }
+    // Step 2: LP is already stripped by the scraper via "LIQ POOL" innerText detection.
+    // analyze.js safety net handles any edge case where no LP is marked.
 
     // Step 3: Funder enrichment
     await enrichWithFunders(tokenData.holders);
@@ -94,7 +76,6 @@ async function analyzeScrapedRoute(req, res) {
 
     return res.json({
       ca,
-      lpAddress: lpAddress || null,
       score: analysisResult.score,
       bars: analysisResult.bars,
       flags: analysisResult.flags,
