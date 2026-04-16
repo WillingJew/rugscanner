@@ -36,13 +36,25 @@ const SYSTEM_ADDRS = new Set([
 
 async function getTokenMintFromPool(poolAddress) {
   try {
-    const result = await rpc('getAccountInfo', [poolAddress, { encoding: 'jsonParsed' }]);
-    const data = result?.value?.data;
-    if (data?.parsed?.info?.mint) return data.parsed.info.mint;
-    if (data?.parsed?.info?.baseMint) return data.parsed.info.baseMint;
-    if (data?.parsed?.info?.tokenMint) return data.parsed.info.tokenMint;
-    // Try raw base64 — look for token accounts in the account data
-    return null;
+    const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'pool',
+        method: 'getTokenAccountsByOwner',
+        params: [poolAddress, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }]
+      })
+    });
+    const data = await res.json();
+    console.log('[Pool] tokenAccounts:', JSON.stringify(data?.result?.value?.[0]?.account?.data?.parsed?.info).slice(0, 200));
+    const accounts = data?.result?.value;
+    if (!accounts?.length) return null;
+    // Find the non-SOL token account — that's the token mint
+    const nonSol = accounts.find(a => 
+      a.account?.data?.parsed?.info?.mint !== 'So11111111111111111111111111111111111111112'
+    );
+    return nonSol?.account?.data?.parsed?.info?.mint || null;
   } catch { return null; }
 }
 
