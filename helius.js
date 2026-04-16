@@ -36,26 +36,17 @@ const SYSTEM_ADDRS = new Set([
 
 async function getTokenMintFromPool(poolAddress) {
   try {
-    const res = await fetch(`https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'pool',
-        method: 'getTokenAccountsByOwner',
-        params: [poolAddress, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }]
-      })
-    });
+    const res = await fetch(`https://api.helius.xyz/v0/addresses/${poolAddress}/transactions?api-key=${process.env.HELIUS_API_KEY}&limit=1&type=SWAP`);
     const data = await res.json();
-    console.log('[Pool] tokenAccounts:', JSON.stringify(data?.result?.value?.[0]?.account?.data?.parsed?.info).slice(0, 200));
-    const accounts = data?.result?.value;
-    if (!accounts?.length) return null;
-    // Find the non-SOL token account — that's the token mint
-    const nonSol = accounts.find(a => 
-      a.account?.data?.parsed?.info?.mint !== 'So11111111111111111111111111111111111111112'
-    );
-    return nonSol?.account?.data?.parsed?.info?.mint || null;
-  } catch { return null; }
+    console.log('[Pool] tx data:', JSON.stringify(data?.[0]?.tokenTransfers?.[0]).slice(0, 200));
+    const transfers = data?.[0]?.tokenTransfers;
+    if (!transfers?.length) return null;
+    const nonSol = transfers.find(t => t.mint !== 'So11111111111111111111111111111111111111112');
+    return nonSol?.mint || null;
+  } catch (e) {
+    console.log('[Pool] error:', e.message);
+    return null;
+  }
 }
 
 async function getTokenSupply(mint) {
