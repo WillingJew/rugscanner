@@ -16,15 +16,13 @@ async function rpc(method, params) {
   return data.result;
 }
 
-// Known DEX program IDs — these own LP token accounts
 const DEX_PROGRAMS = new Set([
-  '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM v4
-  'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C', // Raydium CPMM
-  'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',  // Orca Whirlpool
-  'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', // Raydium CLMM
+  '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8',
+  'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C',
+  'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',
+  'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK',
 ]);
 
-// System addresses that are never real funders
 const SYSTEM_ADDRS = new Set([
   '11111111111111111111111111111111',
   'ComputeBudget111111111111111111111111111111',
@@ -68,35 +66,29 @@ async function getAccountProgram(address) {
 async function getSolBalance(address) {
   try {
     const result = await rpc('getBalance', [address]);
-    return result?.value != null ? result.value / 1e9 : null; // lamports to SOL
+    return result?.value != null ? result.value / 1e9 : null;
   } catch { return null; }
 }
 
 async function getFunder(address) {
   try {
-    // Get oldest transaction
     const sigs = await rpc('getSignaturesForAddress', [address, { limit: 1000 }]);
     if (!sigs?.length) return null;
     const oldest = sigs[sigs.length - 1].signature;
-
-    // Parse it
     const tx = await rpc('getTransaction', [oldest, { 
       encoding: 'jsonParsed', 
       maxSupportedTransactionVersion: 0 
     }]);
     if (!tx) return null;
-
     const accounts = tx.transaction?.message?.accountKeys || [];
     const pre = tx.meta?.preBalances || [];
     const post = tx.meta?.postBalances || [];
-
-    // Find who sent SOL — balance decreased, not system addr, not the wallet itself
     for (let i = 0; i < accounts.length; i++) {
       const pk = accounts[i]?.pubkey || accounts[i];
       if (!pk || pk === address) continue;
       if (SYSTEM_ADDRS.has(pk)) continue;
       const decrease = (pre[i] || 0) - (post[i] || 0);
-      if (decrease >= 1000000) return pk; // at least 0.001 SOL sent
+      if (decrease >= 1000000) return pk;
     }
     return null;
   } catch { return null; }
@@ -107,14 +99,14 @@ async function getWalletBirthTime(address) {
     const sigs = await rpc('getSignaturesForAddress', [address, { limit: 1000 }]);
     if (!sigs?.length) return null;
     const oldest = sigs[sigs.length - 1];
-    return oldest.blockTime || null; // unix timestamp
+    return oldest.blockTime || null;
   } catch { return null; }
 }
 
 async function analyzeToken(mint) {
   mint = mint.trim();
   console.log('[Helius] Analyzing', mint, '| length:', mint.length);
-  
+
   const [supply, accounts] = await Promise.all([
     getTokenSupply(mint),
     getTopHolders(mint)
@@ -125,25 +117,19 @@ async function analyzeToken(mint) {
 
   console.log('[Helius] Supply:', supply, '| Accounts:', accounts.length);
 
-  // Sort by amount, take top 25
   const top25 = accounts
     .filter(a => a.amount > 0)
     .sort((a, b) => b.amount - a.amount)
     .slice(0, 25);
 
-  // Get program owners for LP detection (parallel)
   const programs = await Promise.all(top25.map(a => getAccountProgram(a.owner)));
 
-  // Build holder list
   const holders = top25.map((account, i) => {
     const owner = account.owner;
     const amount = account.amount / Math.pow(10, account.decimals || 6);
     const pct = Math.round((amount / supply) * 10000) / 100;
     const program = programs[i];
-    // Rank #1 is always the LP on Solana meme coins — it's always the largest holder
-    // If rank #1 has a funder address it means a real wallet holds more than LP = flagged separately
     const isLP = i === 0 || DEX_PROGRAMS.has(program);
-
     return {
       rank: i + 1,
       address: owner,
@@ -151,7 +137,7 @@ async function analyzeToken(mint) {
       percentage: pct,
       program,
       isLP,
-      funder: null, // filled in during deep scan
+      funder: null,
       fundedAt: null,
     };
   });
@@ -160,27 +146,21 @@ async function analyzeToken(mint) {
 }
 
 async function enrichWithFunders(holders) {
-  // Only fetch for real (non-LP) top 15 holders
   const targets = holders.filter(h => !h.isLP).slice(0, 15);
   console.log('[Helius] Fetching funders + birth times for', targets.length, 'wallets...');
 
-  // Fetch funders and birth times in parallel
   const [funderResults, birthResults] = await Promise.all([
     Promise.allSettled(
-      targets.map(h => 
-        Promise.race([
-          getFunder(h.address),
-          new Promise(res => setTimeout(() => res(null), 8000))
-        ])
-      )
+      targets.map(h => Promise.race([
+        getFunder(h.address),
+        new Promise(res => setTimeout(() => res(null), 8000))
+      ]))
     ),
     Promise.allSettled(
-      targets.map(h => 
-        Promise.race([
-          getWalletBirthTime(h.address),
-          new Promise(res => setTimeout(() => res(null), 8000))
-        ])
-      )
+      targets.map(h => Promise.race([
+        getWalletBirthTime(h.address),
+        new Promise(res => setTimeout(() => res(null), 8000))
+      ]))
     )
   ]);
 
