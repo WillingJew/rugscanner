@@ -34,72 +34,35 @@ const SYSTEM_ADDRS = new Set([
   'SysvarC1ock11111111111111111111111111111111',
 ]);
 
-// ── POOL → MINT RESOLUTION ────────────────────────────────────────────────────
-// Raydium AMM v4 pool accounts store the token mint (base) at byte offset 400.
-// If the address passed is already a real token mint, getTokenSupply will work
-// directly and we return it as-is. If it's a pool, we extract the mint from
-// the raw account data.
-//
-// Raydium AMM v4 layout (base mint at offset 400, 32 bytes):
-//   https://github.com/raydium-io/raydium-sdk/blob/master/src/amm/layout.ts
-const RAYDIUM_AMM_V4 = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const WRAPPED_SOL = 'So11111111111111111111111111111111111111112';
 
-function base58Encode(bytes) {
-  let num = BigInt('0x' + Buffer.from(bytes).toString('hex'));
-  let result = '';
-  const base = BigInt(58);
-  while (num > 0n) {
-    result = BASE58_ALPHABET[Number(num % base)] + result;
-    num = num / base;
-  }
-  for (const byte of bytes) {
-    if (byte !== 0) break;
-    result = '1' + result;
-  }
-  return result;
-}
-
-async function resolveMintFromPool(address) {
-  // First, check if it's already a valid token mint by trying getTokenSupply
+// Resolves a Raydium pool address → token mint.
+// A Raydium pool owns two token accounts: one for SOL (wrapped), one for the token.
+// We call getTokenAccountsByOwner on the pool address and return the non-SOL mint.
+async function getTokenMintFromPool(address) {
   try {
-    const supplyResult = await rpc('getTokenSupply', [address]);
-    if (supplyResult?.value?.uiAmount != null) {
-      console.log('[Helius] Address is already a token mint:', address);
-      return address;
-    }
-  } catch { /* not a mint, fall through */ }
-
-  // Try to resolve as a Raydium AMM v4 pool
-  try {
-    const info = await rpc('getAccountInfo', [address, { encoding: 'base64' }]);
-    const owner = info?.value?.owner;
-    const dataB64 = info?.value?.data?.[0];
-
-    if (!dataB64) {
-      console.warn('[Helius] No account data for address:', address);
-      return address; // return as-is, let the caller fail with a clear error
-    }
-
-    if (owner !== RAYDIUM_AMM_V4) {
-      console.warn('[Helius] Address is not a Raydium AMM v4 pool (owner:', owner, ')');
-      return address;
-    }
-
-    // Extract base token mint from bytes 400–432
-    const data = Buffer.from(dataB64, 'base64');
-    if (data.length < 432) {
-      console.warn('[Helius] Pool account data too short:', data.length);
-      return address;
-    }
-
-    const mintBytes = data.slice(400, 432);
-    const mint = base58Encode(mintBytes);
-    console.log('[Helius] Resolved pool', address, '→ mint', mint);
+    const res = await fetch(rpcUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 'pool',
+        method: 'getTokenAccountsByOwner',
+        params: [address, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }]
+      })
+    });
+    const data = await res.json();
+    const accounts = data?.result?.value;
+    if (!accounts?.length) return null;
+    // Return the mint that isn't wrapped SOL
+    const tokenAccount = accounts.find(a =>
+      a.account?.data?.parsed?.info?.mint !== WRAPPED_SOL
+    );
+    const mint = tokenAccount?.account?.data?.parsed?.info?.mint || null;
+    if (mint) console.log('[Helius] Resolved pool', address, '→ mint', mint);
     return mint;
   } catch (err) {
-    console.error('[Helius] Pool resolution failed:', err.message);
-    return address;
+    console.error('[Helius] getTokenMintFromPool failed:', err.message);
+    return null;
   }
 }
 
@@ -262,4 +225,4 @@ async function enrichWithFunders(holders) {
   return holders;
 }
 
-module.exports = { analyzeToken, enrichWithFunders, getTokenSupply, getWalletBirthTime, resolveMintFromPool };
+module.exports = { analyzeToken, enrichWithFunders, getTokenSupply, getWalletBirthTime, getTokenMintFromPool };
