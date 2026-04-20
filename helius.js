@@ -36,9 +36,6 @@ const SYSTEM_ADDRS = new Set([
 
 const WRAPPED_SOL = 'So11111111111111111111111111111111111111112';
 
-// Resolves a Raydium pool address → token mint.
-// A Raydium pool owns two token accounts: one for SOL (wrapped), one for the token.
-// We call getTokenAccountsByOwner on the pool address and return the non-SOL mint.
 async function getTokenMintFromPool(address) {
   try {
     const res = await fetch(rpcUrl(), {
@@ -51,17 +48,19 @@ async function getTokenMintFromPool(address) {
       })
     });
     const data = await res.json();
+    console.log('[Pool] address:', address);
+    console.log('[Pool] accounts found:', data?.result?.value?.length ?? 'error');
+    console.log('[Pool] raw:', JSON.stringify(data).slice(0, 300));
     const accounts = data?.result?.value;
     if (!accounts?.length) return null;
-    // Return the mint that isn't wrapped SOL
     const tokenAccount = accounts.find(a =>
       a.account?.data?.parsed?.info?.mint !== WRAPPED_SOL
     );
     const mint = tokenAccount?.account?.data?.parsed?.info?.mint || null;
-    if (mint) console.log('[Helius] Resolved pool', address, '→ mint', mint);
+    console.log('[Pool] resolved mint:', mint);
     return mint;
   } catch (err) {
-    console.error('[Helius] getTokenMintFromPool failed:', err.message);
+    console.error('[Pool] failed:', err.message);
     return null;
   }
 }
