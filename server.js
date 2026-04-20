@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { analyzeToken, enrichWithFunders } = require('./helius');
+const { analyzeToken, enrichWithFunders, resolveMintFromPool } = require('./helius');
 const { analyze } = require('./analyze');
 const express = require('express');
 const cors = require('cors');
@@ -374,6 +374,22 @@ app.post('/scan/test', requireAuth, async (req, res) => {
     res.json({ success: true, heliusResponse: testData });
   } catch (err) {
     console.error('[TEST] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── MINT RESOLUTION ───────────────────────────────────────────────────────────
+// Converts a Raydium pool address → token mint address.
+// Called by the extension when the URL contains a pool CA instead of a mint CA.
+app.post('/resolve-mint', requireAuth, async (req, res) => {
+  const { address } = req.body;
+  if (!address) return res.status(400).json({ error: 'address required' });
+  try {
+    const mint = await resolveMintFromPool(address);
+    console.log('[ResolveMint]', address, '→', mint);
+    res.json({ mint });
+  } catch (err) {
+    console.error('[ResolveMint] Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
