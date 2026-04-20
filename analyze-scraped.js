@@ -13,11 +13,6 @@ async function generateVerdict(analysisResult, holderCount) {
     `[${f.severity.toUpperCase()}] ${f.text}${f.detail ? ' — ' + f.detail : ''}`
   ).join('\n');
 
-  // Include platform info in AI verdict context
-  const platformContext = stats.dominantPlatform
-    ? `DOMINANT PLATFORM: ${stats.dominantPlatform} (${stats.dominantPlatformCount} wallets)`
-    : 'DOMINANT PLATFORM: None detected';
-
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 200,
@@ -28,7 +23,6 @@ HOLDER COUNT: ${holderCount}
 DEATH TRAP: ${deathTrap}
 NO-BUY REASONS: ${noBuy.length > 0 ? noBuy.join('; ') : 'None'}
 TOP HOLDER: ${stats.topHolderPct !== null ? stats.topHolderPct.toFixed(1) + '%' : 'Unknown'}
-${platformContext}
 
 FLAGS:
 ${flagSummary || 'None'}
@@ -38,15 +32,14 @@ Rules:
 - Subtle bundles (score 50-89): 3 sentences. Explain what gave it away.
 - Clean coins (score 0-49, no noBuy): 1 sentence. Call it clean confidently.
 - Never mention "score" or numbers. Speak like a trader.
-- Do not start with "I" or "This coin".
-- If a trading platform cluster was detected, mention it as a signal.` }],
+- Do not start with "I" or "This coin".` }],
   });
 
   return response.content[0].text.trim();
 }
 
 async function analyzeScrapedRoute(req, res) {
-  const { ca, lpAddress, mode, clockIconCount, maxClockNumber, softwareRuns, platformIconRuns, platformIconCount } = req.body;
+  const { ca, lpAddress, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
   const runAI = mode === 'ai';
 
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
@@ -64,15 +57,13 @@ async function analyzeScrapedRoute(req, res) {
       }
     }
 
-    // Step 3: Funder enrichment (now also fetches platform per holder)
+    // Step 3: Funder enrichment
     await enrichWithFunders(tokenData.holders);
 
-    // Step 3b: Attach scraped clock badge data, software runs, and platform icon runs
-    tokenData.clockIconCount    = clockIconCount    || 0;
-    tokenData.maxClockNumber    = maxClockNumber    || 0;
-    tokenData.softwareRuns      = softwareRuns      || [];
-    tokenData.platformIconRuns  = platformIconRuns  || [];
-    tokenData.platformIconCount = platformIconCount || 0;
+    // Step 3b: Attach scraped clock badge data and software runs
+    tokenData.clockIconCount = clockIconCount || 0;
+    tokenData.maxClockNumber = maxClockNumber || 0;
+    tokenData.softwareRuns = softwareRuns || [];
 
     // Step 4: Score
     const analysisResult = analyze(tokenData);
@@ -90,12 +81,12 @@ async function analyzeScrapedRoute(req, res) {
     return res.json({
       ca,
       lpAddress: lpAddress || null,
-      score:      analysisResult.score,
-      bars:       analysisResult.bars,
-      flags:      analysisResult.flags,
-      noBuy:      analysisResult.noBuy,
-      deathTrap:  analysisResult.deathTrap,
-      stats:      analysisResult.stats,      // now includes platformBreakdown, dominantPlatform
+      score: analysisResult.score,
+      bars: analysisResult.bars,
+      flags: analysisResult.flags,
+      noBuy: analysisResult.noBuy,
+      deathTrap: analysisResult.deathTrap,
+      stats: analysisResult.stats,
       holderCount: tokenData.holderCount,
       verdict,
     });
