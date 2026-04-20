@@ -70,7 +70,8 @@ function analyze(tokenData) {
     }
   }
 
-  // ── 3b. CEX LABEL CLUSTERS ───────────────────────────────────────────────
+   // ── 3b. CEX LABEL CLUSTERS ───────────────────────────────────────────────
+  // Wallets funded by different addresses but same CEX label (e.g. 6x "Coinbase")
   const CEX_LABELS = ['coinbase', 'binance', 'kraken', 'okx', 'bybit', 'kucoin'];
   const cexLabelMap = {};
 
@@ -100,62 +101,7 @@ function analyze(tokenData) {
       score += 20;
     }
   }
-
-  // ── 3c. TRADING PLATFORM CLUSTERS ────────────────────────────────────────
-  // When many top holders all bought via the same trading terminal (Axiom, Bullx, Photon, etc.)
-  // it indicates a coordinated bot buy — real organic retail doesn't all use the same tool.
-  //
-  // Thresholds:
-  //   8+ wallets on same platform in top 15 holders → critical (coordinated bot launch)
-  //   5-7 wallets on same platform in top 15 holders → high (suspicious concentration)
-  //   3-4 wallets → medium (worth noting, not alone a no-buy)
-  //
-  // Exception: pump.fun is the launchpad itself, not a trading terminal — organic buyers
-  // often show pump.fun in their tx history, so we raise the threshold for it.
-  const platformMap = {};
-  for (const h of real) {
-    if (!h.platform) continue;
-    if (!platformMap[h.platform]) platformMap[h.platform] = [];
-    platformMap[h.platform].push(h);
-  }
-
-  for (const [platform, group] of Object.entries(platformMap)) {
-    if (group.length < 3) continue;
-
-    const totalPct = group.reduce((s, h) => s + h.percentage, 0);
-    const ranks = group.map(h => `#${h.rank}`).join(', ');
-    const isPumpFun = platform === 'pump.fun';
-
-    // pump.fun threshold is higher — it's the launchpad so organic buyers show up here
-    const critThreshold = isPumpFun ? 10 : 8;
-    const highThreshold = isPumpFun ? 7  : 5;
-    const medThreshold  = isPumpFun ? 5  : 3;
-
-    if (group.length >= critThreshold || (group.length >= highThreshold && totalPct >= 20)) {
-      flag(
-        `${group.length} top holders all bought via ${platform} — ${totalPct.toFixed(1)}% combined`,
-        'critical',
-        `Ranks: ${ranks} — coordinated bot buys through same trading terminal`
-      );
-      noBuy.push(`${group.length} ${platform} wallets control ${totalPct.toFixed(1)}% — coordinated`);
-      score += 35;
-    } else if (group.length >= highThreshold || (group.length >= medThreshold && totalPct >= 12)) {
-      flag(
-        `${group.length} top holders bought via ${platform} — ${totalPct.toFixed(1)}% combined`,
-        'high',
-        `Ranks: ${ranks} — unusual platform concentration among top holders`
-      );
-      score += 18;
-    } else if (group.length >= medThreshold) {
-      flag(
-        `${group.length} top holders bought via ${platform}`,
-        'medium',
-        `Ranks: ${ranks} — ${totalPct.toFixed(1)}% combined`
-      );
-      score += 8;
-    }
-  }
-
+  
   // ── 4. INDIVIDUAL WALLET % ────────────────────────────────────────────────
   for (const h of real) {
     if (h.percentage >= 8) {
@@ -177,7 +123,7 @@ function analyze(tokenData) {
     pctGroups[key] = (pctGroups[key] || []);
     pctGroups[key].push(h);
   }
-  for (const [pct, group] of Object.entries(pctGroups)) {
+ for (const [pct, group] of Object.entries(pctGroups)) {
     if (group.length < 5) continue;
 
     if (group.length >= 8) {
@@ -193,8 +139,10 @@ function analyze(tokenData) {
   }
 
   // ── 6. SOL BALANCE UNIFORMITY ────────────────────────────────────────────
+  // Identical SOL balances across top holders = funded from same source
   const withBal = real.filter(h => h.solBalance != null && h.solBalance > 0 && h.solBalance < 100);
   if (withBal.length >= 4) {
+    // Group wallets within 0.005 SOL of each other (very tight — catches exact matches)
     const sorted = [...withBal].sort((a, b) => a.solBalance - b.solBalance);
     let bestGroup = [];
     for (let i = 0; i < sorted.length; i++) {
@@ -224,7 +172,11 @@ function analyze(tokenData) {
     }
   }
 
-  // ── 6c. CLOCK BADGE DETECTION ────────────────────────────────────────────
+  // ── 7. TOP HOLDER CONCENTRATION ──────────────────────────────────────────
+
+  // ── 6c. CLOCK BADGE DETECTION (scraped from Terminal UI) ─────────────────
+  // Terminal shows clock icons with numbers indicating how many wallets share a funder
+  // clockIconCount = how many rows had the icon, maxClockNumber = biggest group size
   const clockIconCount = tokenData.clockIconCount || 0;
   const maxClockNumber = tokenData.maxClockNumber || 0;
 
@@ -246,105 +198,47 @@ function analyze(tokenData) {
     }
   }
 
-  // ── 6d. SOFTWARE RUN DETECTION ───────────────────────────────────────────
+  // ── 6d. SOFTWARE RUN DETECTION (scraped from Terminal UI) ────────────────
+  // Consecutive holders using the same trading software = possible coordinated bundle
+  // 4-6 in run top 10 = critical, below rank 10 = high, 7+ anywhere = critical
   const softwareRuns = tokenData.softwareRuns || [];
   for (const run of softwareRuns) {
     const { software, startRank, endRank, count } = run;
     const softwareLabel = software.charAt(0).toUpperCase() + software.slice(1);
-
+    
+    // Sum percentages of holders in this run
     let totalPct = 0;
     for (const r of run.ranks) {
       const h = real.find(x => x.rank === r);
       if (h) totalPct += h.percentage;
     }
     const pctLabel = totalPct > 0 ? ` — ${totalPct.toFixed(1)}% combined` : '';
-
+    
     if (count >= 7) {
+      // 7+ in a run anywhere is absurd
       flag(`${count} consecutive holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'critical',
         `Same trading software across ${count} consecutive wallets${pctLabel} — strong bundle signal`);
       noBuy.push(`${count} consecutive ${softwareLabel} wallets at ranks ${startRank}-${endRank}`);
       score += 35;
     } else if (startRank <= 10) {
+      // 4-6 in top 10 = critical
       flag(`${count} consecutive top-10 holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'critical',
         `Same trading software across ${count} consecutive top wallets${pctLabel}`);
       noBuy.push(`${count} ${softwareLabel} wallets bundled in top 10 (ranks ${startRank}-${endRank})`);
       score += 30;
     } else {
+      // 4-6 below rank 10 = high
       flag(`${count} consecutive holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'high',
         `Same trading software across ${count} consecutive wallets${pctLabel}`);
       score += 15;
     }
   }
 
-  // ── 6e. PLATFORM ICON RUN DETECTION (scraped from Terminal UI) ───────────
-  // Terminal shows a platform logo (Axiom, BullX, Photon, etc.) next to each holder.
-  // Consecutive holders using the same platform = coordinated bot launch.
-  // Gap tolerance of 1 is already applied in content.js when building the runs.
-  //
-  // Scoring:
-  //   10+ in a run anywhere          → critical + noBuy
-  //   5-9 in top 10                  → critical + noBuy
-  //   5-9 below rank 10              → high
-  //   3-4 in top 10                  → high
-  //   3-4 below rank 10              → medium
-  const platformIconRuns  = tokenData.platformIconRuns  || [];
-  const platformIconCount = tokenData.platformIconCount || 0;
-
-  for (const run of platformIconRuns) {
-    const { platform, startRank, endRank, count, ranks } = run;
-
-    let totalPct = 0;
-    for (const r of ranks) {
-      const h = real.find(x => x.rank === r);
-      if (h) totalPct += h.percentage;
-    }
-    const pctLabel = totalPct > 0 ? ` — ${totalPct.toFixed(1)}% combined` : '';
-
-    if (count >= 10) {
-      flag(
-        `${count} consecutive ${platform} wallets (ranks ${startRank}–${endRank})`,
-        'critical',
-        `Same trading platform across ${count} consecutive holders${pctLabel} — coordinated bot launch`
-      );
-      noBuy.push(`${count} consecutive ${platform} holders (ranks ${startRank}–${endRank})`);
-      score += 45;
-    } else if (count >= 5 && startRank <= 10) {
-      flag(
-        `${count} consecutive top-10 ${platform} wallets (ranks ${startRank}–${endRank})`,
-        'critical',
-        `Same platform across ${count} consecutive top holders${pctLabel}`
-      );
-      noBuy.push(`${count} ${platform} wallets in top 10 (ranks ${startRank}–${endRank})`);
-      score += 35;
-    } else if (count >= 5) {
-      flag(
-        `${count} consecutive ${platform} wallets (ranks ${startRank}–${endRank})`,
-        'high',
-        `Same platform across ${count} consecutive holders${pctLabel}`
-      );
-      score += 20;
-    } else if (startRank <= 10) {
-      // 3-4 in top 10
-      flag(
-        `${count} consecutive top-10 ${platform} wallets (ranks ${startRank}–${endRank})`,
-        'high',
-        `Same platform in top holders${pctLabel} — may indicate coordinated entry`
-      );
-      score += 15;
-    } else {
-      // 3-4 below rank 10
-      flag(
-        `${count} consecutive ${platform} wallets (ranks ${startRank}–${endRank})`,
-        'medium',
-        `Same trading platform${pctLabel}`
-      );
-      score += 8;
-    }
-  }
-
-
+  // ── 6b. WALLET BIRTH TIME CLUSTERING ─────────────────────────────────────
+  // If many holders' wallets were created within the same 5-minute window = coordinated
   const withBirth = real.filter(h => h.fundedAt != null);
   if (withBirth.length >= 4) {
+    // Sort by birth time, then find the largest cluster within 300s (5 min)
     const sorted = [...withBirth].sort((a, b) => a.fundedAt - b.fundedAt);
     let bestCluster = [];
 
@@ -372,7 +266,7 @@ function analyze(tokenData) {
     }
   }
 
-  const top5pct  = real.slice(0, 5).reduce((s, h)  => s + h.percentage, 0);
+  const top5pct = real.slice(0, 5).reduce((s, h) => s + h.percentage, 0);
   const top10pct = real.slice(0, 10).reduce((s, h) => s + h.percentage, 0);
 
   if (top5pct >= 40) {
@@ -403,17 +297,6 @@ function analyze(tokenData) {
   const funderClusters = Object.values(funderMap).filter(g => g.length >= 2).length;
   const topHolder = real[0];
 
-  // Platform breakdown for sidebar display
-  const platformBreakdown = {};
-  for (const h of real) {
-    if (h.platform) {
-      platformBreakdown[h.platform] = (platformBreakdown[h.platform] || 0) + 1;
-    }
-  }
-  // Dominant platform = most common among detected holders
-  const dominantPlatform = Object.entries(platformBreakdown)
-    .sort((a, b) => b[1] - a[1])[0] || null;
-
   return {
     score,
     bars,
@@ -424,9 +307,6 @@ function analyze(tokenData) {
     stats: {
       topHolderPct: topHolder?.percentage ?? null,
       funderClusters,
-      platformBreakdown,                                          // full map
-      dominantPlatform: dominantPlatform ? dominantPlatform[0] : null,  // e.g. "Axiom"
-      dominantPlatformCount: dominantPlatform ? dominantPlatform[1] : 0, // how many wallets
     }
   };
 }
