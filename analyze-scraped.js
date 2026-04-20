@@ -46,7 +46,7 @@ Rules:
 }
 
 async function analyzeScrapedRoute(req, res) {
-  const { ca, lpAddress, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
+  const { ca, lpAddress, mode, clockIconCount, maxClockNumber, softwareRuns, platformIconRuns, platformIconCount } = req.body;
   const runAI = mode === 'ai';
 
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
@@ -67,10 +67,12 @@ async function analyzeScrapedRoute(req, res) {
     // Step 3: Funder enrichment (now also fetches platform per holder)
     await enrichWithFunders(tokenData.holders);
 
-    // Step 3b: Attach scraped clock badge data and software runs
-    tokenData.clockIconCount = clockIconCount || 0;
-    tokenData.maxClockNumber = maxClockNumber || 0;
-    tokenData.softwareRuns   = softwareRuns   || [];
+    // Step 3b: Attach scraped clock badge data, software runs, and platform icon runs
+    tokenData.clockIconCount    = clockIconCount    || 0;
+    tokenData.maxClockNumber    = maxClockNumber    || 0;
+    tokenData.softwareRuns      = softwareRuns      || [];
+    tokenData.platformIconRuns  = platformIconRuns  || [];
+    tokenData.platformIconCount = platformIconCount || 0;
 
     // Step 4: Score
     const analysisResult = analyze(tokenData);
