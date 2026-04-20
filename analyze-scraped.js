@@ -2,7 +2,7 @@
 // Receives: ca, lpAddress, mode
 // Helius fetches real holder data, marks LP, scores, optional AI verdict
 
-const { analyzeToken, enrichWithFunders } = require('./helius');
+const { analyzeToken, enrichWithFunders, getTokenMintFromPool } = require('./helius');
 const { analyze } = require('./analyze');
 const Anthropic = require('@anthropic-ai/sdk');
 const anthropic = new Anthropic();
@@ -47,8 +47,16 @@ async function analyzeScrapedRoute(req, res) {
   console.log(`[AnalyzeScrape] CA: ${ca} | LP: ${lpAddress || 'none'} | mode: ${mode}`);
 
   try {
-    // Step 1: Helius — real holder data
-    const tokenData = await analyzeToken(ca);
+    // Step 1: Resolve pool address → token mint if needed
+    let tokenCA = ca;
+    const mintFromPool = await getTokenMintFromPool(ca);
+    if (mintFromPool) {
+      console.log(`[AnalyzeScrape] Pool resolved: ${ca} → ${mintFromPool}`);
+      tokenCA = mintFromPool;
+    }
+
+    // Step 2: Helius — real holder data
+    const tokenData = await analyzeToken(tokenCA);
 
     // Step 2: Mark LP using padre-scraped address
     if (lpAddress) {
