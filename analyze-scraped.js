@@ -47,12 +47,14 @@ async function analyzeScrapedRoute(req, res) {
   console.log(`[AnalyzeScrape] CA: ${ca} | LP: ${lpAddress || 'none'} | mode: ${mode}`);
 
   try {
-    // Step 1: Resolve pool address → token mint if needed
+    // Step 1: Resolve pool → mint
     let tokenCA = ca;
     const mintFromPool = await getTokenMintFromPool(ca);
     if (mintFromPool) {
       console.log(`[AnalyzeScrape] Pool resolved: ${ca} → ${mintFromPool}`);
       tokenCA = mintFromPool;
+    } else {
+      console.log(`[AnalyzeScrape] No pool resolution for ${ca}, using as-is`);
     }
 
     // Step 2: Helius — real holder data
