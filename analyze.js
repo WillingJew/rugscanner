@@ -276,7 +276,73 @@ function analyze(tokenData) {
     }
   }
 
-  // ── 6b. WALLET BIRTH TIME CLUSTERING ─────────────────────────────────────
+  // ── 6e. PLATFORM ICON RUN DETECTION (scraped from Terminal UI) ───────────
+  // Terminal shows a platform logo (Axiom, BullX, Photon, etc.) next to each holder.
+  // Consecutive holders using the same platform = coordinated bot launch.
+  // Gap tolerance of 1 is already applied in content.js when building the runs.
+  //
+  // Scoring:
+  //   10+ in a run anywhere          → critical + noBuy
+  //   5-9 in top 10                  → critical + noBuy
+  //   5-9 below rank 10              → high
+  //   3-4 in top 10                  → high
+  //   3-4 below rank 10              → medium
+  const platformIconRuns  = tokenData.platformIconRuns  || [];
+  const platformIconCount = tokenData.platformIconCount || 0;
+
+  for (const run of platformIconRuns) {
+    const { platform, startRank, endRank, count, ranks } = run;
+
+    let totalPct = 0;
+    for (const r of ranks) {
+      const h = real.find(x => x.rank === r);
+      if (h) totalPct += h.percentage;
+    }
+    const pctLabel = totalPct > 0 ? ` — ${totalPct.toFixed(1)}% combined` : '';
+
+    if (count >= 10) {
+      flag(
+        `${count} consecutive ${platform} wallets (ranks ${startRank}–${endRank})`,
+        'critical',
+        `Same trading platform across ${count} consecutive holders${pctLabel} — coordinated bot launch`
+      );
+      noBuy.push(`${count} consecutive ${platform} holders (ranks ${startRank}–${endRank})`);
+      score += 45;
+    } else if (count >= 5 && startRank <= 10) {
+      flag(
+        `${count} consecutive top-10 ${platform} wallets (ranks ${startRank}–${endRank})`,
+        'critical',
+        `Same platform across ${count} consecutive top holders${pctLabel}`
+      );
+      noBuy.push(`${count} ${platform} wallets in top 10 (ranks ${startRank}–${endRank})`);
+      score += 35;
+    } else if (count >= 5) {
+      flag(
+        `${count} consecutive ${platform} wallets (ranks ${startRank}–${endRank})`,
+        'high',
+        `Same platform across ${count} consecutive holders${pctLabel}`
+      );
+      score += 20;
+    } else if (startRank <= 10) {
+      // 3-4 in top 10
+      flag(
+        `${count} consecutive top-10 ${platform} wallets (ranks ${startRank}–${endRank})`,
+        'high',
+        `Same platform in top holders${pctLabel} — may indicate coordinated entry`
+      );
+      score += 15;
+    } else {
+      // 3-4 below rank 10
+      flag(
+        `${count} consecutive ${platform} wallets (ranks ${startRank}–${endRank})`,
+        'medium',
+        `Same trading platform${pctLabel}`
+      );
+      score += 8;
+    }
+  }
+
+
   const withBirth = real.filter(h => h.fundedAt != null);
   if (withBirth.length >= 4) {
     const sorted = [...withBirth].sort((a, b) => a.fundedAt - b.fundedAt);
