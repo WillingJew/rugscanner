@@ -13,10 +13,19 @@ function analyze(tokenData) {
     flags.push({ text, severity, detail });
   }
 
-  // ── 1. LP NOT AT RANK 1 ──────────────────────────────────────────────────
+  // ── 1. LP RANK CHECK ─────────────────────────────────────────────────────
+  // On a healthy Solana meme coin, the liquidity pool sits at rank #1 with
+  // the largest balance. Anything else means a single wallet holds more than
+  // the pool itself — extremely high risk.
   const lp = holders.find(h => h.isLP);
-  if (lp && lp.rank !== 1) {
-    flag(`LP is not rank #1 — it's rank #${lp.rank}`, 'critical');
+  if (!lp) {
+    flag('No liquidity pool detected in top holders', 'critical',
+      'Could not identify an LP among top holders — pool may be tiny, missing, or non-standard DEX');
+    noBuy.push('No LP detected in top holders');
+    score += 40;
+  } else if (lp.rank !== 1) {
+    flag(`LP is not rank #1 — it's rank #${lp.rank}`, 'critical',
+      `A wallet at rank #${lp.rank > 1 ? '1' : '?'} holds more than the liquidity pool — single holder controls more than the market`);
     noBuy.push('LP is not #1 holder');
     score += 40;
   }
