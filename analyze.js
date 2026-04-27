@@ -13,19 +13,40 @@ function analyze(tokenData) {
     flags.push({ text, severity, detail });
   }
 
-  // ── 1. LP RANK CHECK ─────────────────────────────────────────────────────
-  // On a healthy Solana meme coin, the liquidity pool sits at rank #1 with
-  // the largest balance. Anything else means a single wallet holds more than
-  // the pool itself — extremely high risk.
+  // Compute consecutive same-software runs from holders[].software.
+  // Only same-software counts (4 Photon in a row), not mixed.
+  // Uses ranks as ordered, skipping holders with no software (they break runs).
+  const softwareRuns = (() => {
+    const runs = [];
+    const ordered = [...real].sort((a, b) => a.rank - b.rank);
+    let i = 0;
+    while (i < ordered.length) {
+      const sw = ordered[i].software;
+      if (!sw) { i++; continue; }
+      let j = i;
+      while (j < ordered.length && ordered[j].software === sw &&
+             (j === i || ordered[j].rank === ordered[j - 1].rank + 1)) {
+        j++;
+      }
+      const count = j - i;
+      if (count >= 4) {
+        runs.push({
+          software: sw,
+          startRank: ordered[i].rank,
+          endRank: ordered[j - 1].rank,
+          count,
+          ranks: ordered.slice(i, j).map(h => h.rank),
+        });
+      }
+      i = j;
+    }
+    return runs;
+  })();
+
+  // ── 1. LP NOT AT RANK 1 ──────────────────────────────────────────────────
   const lp = holders.find(h => h.isLP);
-  if (!lp) {
-    flag('No liquidity pool detected in top holders', 'critical',
-      'Could not identify an LP among top holders — pool may be tiny, missing, or non-standard DEX');
-    noBuy.push('No LP detected in top holders');
-    score += 40;
-  } else if (lp.rank !== 1) {
-    flag(`LP is not rank #1 — it's rank #${lp.rank}`, 'critical',
-      `A wallet at rank #${lp.rank > 1 ? '1' : '?'} holds more than the liquidity pool — single holder controls more than the market`);
+  if (lp && lp.rank !== 1) {
+    flag(`LP is not rank #1 — it's rank #${lp.rank}`, 'critical');
     noBuy.push('LP is not #1 holder');
     score += 40;
   }
@@ -207,10 +228,9 @@ function analyze(tokenData) {
     }
   }
 
-  // ── 6d. SOFTWARE RUN DETECTION (scraped from Terminal UI) ────────────────
+  // ── 6d. SOFTWARE RUN DETECTION ───────────────────────────────────────────
   // Consecutive holders using the same trading software = possible coordinated bundle
   // 4-6 in run top 10 = critical, below rank 10 = high, 7+ anywhere = critical
-  const softwareRuns = tokenData.softwareRuns || [];
   for (const run of softwareRuns) {
     const { software, startRank, endRank, count } = run;
     const softwareLabel = software.charAt(0).toUpperCase() + software.slice(1);
