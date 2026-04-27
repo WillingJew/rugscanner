@@ -34,37 +34,6 @@ const SYSTEM_ADDRS = new Set([
   'SysvarC1ock11111111111111111111111111111111',
 ]);
 
-const WRAPPED_SOL = 'So11111111111111111111111111111111111111112';
-
-async function getTokenMintFromPool(address) {
-  try {
-    const res = await fetch(rpcUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 'pool',
-        method: 'getTokenAccountsByOwner',
-        params: [address, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }]
-      })
-    });
-    const data = await res.json();
-    console.log('[Pool] address:', address);
-    console.log('[Pool] accounts found:', data?.result?.value?.length ?? 'error');
-    console.log('[Pool] raw:', JSON.stringify(data).slice(0, 300));
-    const accounts = data?.result?.value;
-    if (!accounts?.length) return null;
-    const tokenAccount = accounts.find(a =>
-      a.account?.data?.parsed?.info?.mint !== WRAPPED_SOL
-    );
-    const mint = tokenAccount?.account?.data?.parsed?.info?.mint || null;
-    console.log('[Pool] resolved mint:', mint);
-    return mint;
-  } catch (err) {
-    console.error('[Pool] failed:', err.message);
-    return null;
-  }
-}
-
 async function getTokenSupply(mint) {
   const result = await rpc('getTokenSupply', [mint]);
   return result?.value?.uiAmount || null;
@@ -170,9 +139,10 @@ async function analyzeToken(mint) {
     const amount = account.amount / Math.pow(10, account.decimals || 6);
     const pct = Math.round((amount / supply) * 10000) / 100;
     const program = programs[i];
-    // Rank #1 is always the LP on Solana meme coins — it's always the largest holder
-    // If rank #1 has a funder address it means a real wallet holds more than LP = flagged separately
-    const isLP = i === 0 || DEX_PROGRAMS.has(program);
+    // LP is identified by program ownership ONLY — never by rank.
+    // Rank #1 isn't always the pool: sometimes a dev/sniper wallet holds more than the pool.
+    // analyze.js will flag the case where the real LP isn't at rank 1.
+    const isLP = DEX_PROGRAMS.has(program);
 
     return {
       rank: i + 1,
@@ -224,4 +194,4 @@ async function enrichWithFunders(holders) {
   return holders;
 }
 
-module.exports = { analyzeToken, enrichWithFunders, getTokenSupply, getWalletBirthTime, getTokenMintFromPool };
+module.exports = { analyzeToken, enrichWithFunders, getTokenSupply, getWalletBirthTime };
