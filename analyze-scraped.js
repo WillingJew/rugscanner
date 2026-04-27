@@ -2,7 +2,7 @@
 // Receives: ca, lpAddress, mode
 // Helius fetches real holder data, marks LP, scores, optional AI verdict
 
-const { analyzeToken, enrichWithFunders, getTokenMintFromPool } = require('./helius');
+const { analyzeToken, enrichWithFunders } = require('./helius');
 const { analyze } = require('./analyze');
 const Anthropic = require('@anthropic-ai/sdk');
 const anthropic = new Anthropic();
@@ -47,21 +47,13 @@ async function analyzeScrapedRoute(req, res) {
   console.log(`[AnalyzeScrape] CA: ${ca} | LP: ${lpAddress || 'none'} | mode: ${mode}`);
 
   try {
-    // Step 1: Resolve pool → mint
-    let tokenCA = ca;
-    const mintFromPool = await getTokenMintFromPool(ca);
-    if (mintFromPool) {
-      console.log(`[AnalyzeScrape] Pool resolved: ${ca} → ${mintFromPool}`);
-      tokenCA = mintFromPool;
-    } else {
-      console.log(`[AnalyzeScrape] No pool resolution for ${ca}, using as-is`);
-    }
+    // Step 1: Helius — real holder data
+    const tokenData = await analyzeToken(ca);
 
-    // Step 2: Helius — real holder data
-    const tokenData = await analyzeToken(tokenCA);
-
-    // Step 2: Mark LP using padre-scraped address
+    // Step 2: Mark LP using padre-scraped address as source of truth (overrides helius guess).
+    // Without this override, only program-based detection from helius is used.
     if (lpAddress) {
+      for (const h of tokenData.holders) h.isLP = false;
       for (const h of tokenData.holders) {
         if (h.address === lpAddress) { h.isLP = true; break; }
       }
