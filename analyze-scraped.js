@@ -39,23 +39,39 @@ Rules:
 }
 
 async function analyzeScrapedRoute(req, res) {
-  const { ca, lpAddress, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
+  const { ca, lpAddress, lpRank, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
   const runAI = mode === 'ai';
 
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
 
-  console.log(`[AnalyzeScrape] CA: ${ca} | LP: ${lpAddress || 'none'} | mode: ${mode}`);
+  console.log(`[AnalyzeScrape] CA: ${ca} | LP addr: ${lpAddress || 'none'} | LP rank: ${lpRank ?? 'none'} | mode: ${mode}`);
 
   try {
     // Step 1: Helius — real holder data
     const tokenData = await analyzeToken(ca);
 
-    // Step 2: Mark LP using padre-scraped address as source of truth (overrides helius guess).
-    // Without this override, only program-based detection from helius is used.
-    if (lpAddress) {
+    // Step 2: Mark LP — Padre's scraped "LIQ POOL" label is the source of truth.
+    // Helius can't reliably identify the pool because:
+    //   (a) DEX_PROGRAMS only knows about a few AMMs (no pump.fun, Meteora, etc.)
+    //   (b) Helius's top holders for a mint may not even include the pool's token account
+    // So we trust Padre's literal "LIQ POOL" string match, mapped by RANK (not address —
+    // Helius and Padre often disagree on which address represents the pool).
+    if (lpRank != null || lpAddress) {
+      // Clear any stale isLP flags Helius set
       for (const h of tokenData.holders) h.isLP = false;
-      for (const h of tokenData.holders) {
-        if (h.address === lpAddress) { h.isLP = true; break; }
+
+      // Prefer rank match (Padre scrape), fall back to address match
+      let marked = false;
+      if (lpRank != null) {
+        const target = tokenData.holders.find(h => h.rank === lpRank);
+        if (target) { target.isLP = true; marked = true; }
+      }
+      if (!marked && lpAddress) {
+        const target = tokenData.holders.find(h => h.address === lpAddress);
+        if (target) { target.isLP = true; marked = true; }
+      }
+      if (!marked) {
+        console.warn('[AnalyzeScrape] LP info supplied but no holder matched');
       }
     }
 
