@@ -13,36 +13,6 @@ function analyze(tokenData) {
     flags.push({ text, severity, detail });
   }
 
-  // Compute consecutive same-software runs from holders[].software.
-  // Only same-software counts (4 Photon in a row), not mixed.
-  // Uses ranks as ordered, skipping holders with no software (they break runs).
-  const softwareRuns = (() => {
-    const runs = [];
-    const ordered = [...real].sort((a, b) => a.rank - b.rank);
-    let i = 0;
-    while (i < ordered.length) {
-      const sw = ordered[i].software;
-      if (!sw) { i++; continue; }
-      let j = i;
-      while (j < ordered.length && ordered[j].software === sw &&
-             (j === i || ordered[j].rank === ordered[j - 1].rank + 1)) {
-        j++;
-      }
-      const count = j - i;
-      if (count >= 4) {
-        runs.push({
-          software: sw,
-          startRank: ordered[i].rank,
-          endRank: ordered[j - 1].rank,
-          count,
-          ranks: ordered.slice(i, j).map(h => h.rank),
-        });
-      }
-      i = j;
-    }
-    return runs;
-  })();
-
   // ── 1. LP NOT AT RANK 1 ──────────────────────────────────────────────────
   const lp = holders.find(h => h.isLP);
   if (lp && lp.rank !== 1) {
@@ -228,40 +198,110 @@ function analyze(tokenData) {
     }
   }
 
-  // ── 6d. SOFTWARE RUN DETECTION ───────────────────────────────────────────
-  // Consecutive holders using the same trading software = possible coordinated bundle
-  // 4-6 in run top 10 = critical, below rank 10 = high, 7+ anywhere = critical
-  for (const run of softwareRuns) {
-    const { software, startRank, endRank, count } = run;
-    const softwareLabel = software.charAt(0).toUpperCase() + software.slice(1);
-    
-    // Sum percentages of holders in this run
-    let totalPct = 0;
-    for (const r of run.ranks) {
-      const h = real.find(x => x.rank === r);
-      if (h) totalPct += h.percentage;
-    }
-    const pctLabel = totalPct > 0 ? ` — ${totalPct.toFixed(1)}% combined` : '';
-    
-    if (count >= 7) {
-      // 7+ in a run anywhere is absurd
-      flag(`${count} consecutive holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'critical',
-        `Same trading software across ${count} consecutive wallets${pctLabel} — strong bundle signal`);
-      noBuy.push(`${count} consecutive ${softwareLabel} wallets at ranks ${startRank}-${endRank}`);
-      score += 35;
-    } else if (startRank <= 10) {
-      // 4-6 in top 10 = critical
-      flag(`${count} consecutive top-10 holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'critical',
-        `Same trading software across ${count} consecutive top wallets${pctLabel}`);
-      noBuy.push(`${count} ${softwareLabel} wallets bundled in top 10 (ranks ${startRank}-${endRank})`);
+  // ── 6d. CONSECUTIVE ICON RUNS ────────────────────────────────────────────
+  // Adjacent-rank runs of holders sharing the same Padre UI icon. Treated as a
+  // possible hidden bundle — not chart-tanking by itself, but worth noting.
+  // Applied separately to each icon family:
+  //   - software brand (Axiom / Photon / Terminal — must match exactly; mixed brands ignored)
+  //   - bundle icon (Padre's stacked-diamond marker)
+  //   - fresh-wallet icon (Padre's leaf marker)
+  //   - insider icon (Padre's ghost marker)
+  //
+  // Severity by run length: 4-5 = low (+5), 6 = medium (+12), 7+ = critical (+30).
+  // Override: if the cluster's combined % > 8 it becomes critical (+40) and adds noBuy,
+  // regardless of length — that much supply concentrated in one icon group is a real risk.
+  const orderedReal = [...real].sort((a, b) => a.rank - b.rank);
+
+  function flagIconRun(label, run) {
+    const count = run.length;
+    const totalPct = run.reduce((s, h) => s + (h.percentage || 0), 0);
+    const ranks = `${run[0].rank}-${run[run.length - 1].rank}`;
+    const pctLabel = `${totalPct.toFixed(1)}% combined`;
+
+    if (totalPct > 8) {
+      flag(
+        `${count} consecutive ${label} wallets — ${pctLabel}`,
+        'critical',
+        `Ranks ${ranks} — cluster controls more than 8% of supply`
+      );
+      noBuy.push(`${count} consecutive ${label} wallets control ${totalPct.toFixed(1)}%`);
+      score += 40;
+    } else if (count >= 7) {
+      flag(
+        `${count} consecutive ${label} wallets — ${pctLabel}`,
+        'critical',
+        `Ranks ${ranks}`
+      );
+      noBuy.push(`${count} consecutive ${label} wallets at ranks ${ranks}`);
       score += 30;
+    } else if (count === 6) {
+      flag(
+        `${count} consecutive ${label} wallets — ${pctLabel}`,
+        'medium',
+        `Ranks ${ranks}`
+      );
+      score += 12;
     } else {
-      // 4-6 below rank 10 = high
-      flag(`${count} consecutive holders using ${softwareLabel} (ranks ${startRank}-${endRank})`, 'high',
-        `Same trading software across ${count} consecutive wallets${pctLabel}`);
-      score += 15;
+      // 4 or 5
+      flag(
+        `${count} consecutive ${label} wallets — ${pctLabel}`,
+        'low',
+        `Ranks ${ranks}`
+      );
+      score += 5;
     }
   }
+
+  // scanIconRuns: walks orderedReal looking for runs where matchFn(holder) is truthy
+  // AND each consecutive pair satisfies sameAs() AND ranks are strictly adjacent.
+  // When a run of >=4 ends, calls flagIconRun with a label derived from the first holder.
+  function scanIconRuns(matchFn, sameAs, labelFn) {
+    let i = 0;
+    while (i < orderedReal.length) {
+      if (!matchFn(orderedReal[i])) { i++; continue; }
+      let j = i + 1;
+      while (
+        j < orderedReal.length &&
+        matchFn(orderedReal[j]) &&
+        sameAs(orderedReal[i], orderedReal[j]) &&
+        orderedReal[j].rank === orderedReal[j - 1].rank + 1
+      ) {
+        j++;
+      }
+      const run = orderedReal.slice(i, j);
+      if (run.length >= 4) flagIconRun(labelFn(orderedReal[i]), run);
+      i = j;
+    }
+  }
+
+  // Same-brand software runs only — mixed brands (Axiom→Photon→Terminal) are NOT
+  // a bundle signal, they're just retail diversity. Capitalised label for the message.
+  scanIconRuns(
+    h => !!h.software,
+    (a, b) => a.software === b.software,
+    h => h.software.charAt(0).toUpperCase() + h.software.slice(1)
+  );
+
+  // Bundle icon runs — Padre marks wallets with prior bundling history.
+  scanIconRuns(
+    h => !!h.isBundled,
+    () => true,
+    () => 'bundle-icon'
+  );
+
+  // Fresh-wallet (leaf) runs — newly funded wallets with no trading history.
+  scanIconRuns(
+    h => !!h.isFreshWallet,
+    () => true,
+    () => 'fresh-wallet'
+  );
+
+  // Insider (ghost) runs — wallets that bought pre-bond / pre-launch.
+  scanIconRuns(
+    h => !!h.isInsider,
+    () => true,
+    () => 'insider'
+  );
 
   // ── 6b. WALLET BIRTH TIME CLUSTERING ─────────────────────────────────────
   // If many holders' wallets were created within the same 5-minute window = coordinated

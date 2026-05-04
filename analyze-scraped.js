@@ -39,7 +39,11 @@ Rules:
 }
 
 async function analyzeScrapedRoute(req, res) {
-  const { ca, lpAddress, lpRank, mode, clockIconCount, maxClockNumber, softwareRuns } = req.body;
+  const {
+    ca, lpAddress, lpRank, mode,
+    clockIconCount, maxClockNumber, softwareRuns,
+    holders: scrapedHolders, // per-holder icon data from the Padre DOM scrape
+  } = req.body;
   const runAI = mode === 'ai';
 
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
@@ -82,6 +86,26 @@ async function analyzeScrapedRoute(req, res) {
     tokenData.clockIconCount = clockIconCount || 0;
     tokenData.maxClockNumber = maxClockNumber || 0;
     tokenData.softwareRuns = softwareRuns || [];
+
+    // Step 3c: Merge scraped per-holder icon flags onto the Helius holders.
+    // Helius gives us on-chain truth (balances, funders) but knows nothing about Padre's
+    // UI icons (software brand, bundle/leaf/insider markers). The scraper extracts those
+    // from the DOM. Match by address — that's the only key both sides agree on.
+    // Without this merge, the consecutive-icon-runs detector in analyze.js has no input.
+    if (Array.isArray(scrapedHolders)) {
+      const byAddr = Object.create(null);
+      for (const sh of scrapedHolders) {
+        if (sh && sh.address) byAddr[sh.address] = sh;
+      }
+      for (const h of tokenData.holders) {
+        const sh = byAddr[h.address];
+        if (!sh) continue;
+        h.software      = sh.software || null;
+        h.isBundled     = !!sh.isBundled;
+        h.isFreshWallet = !!sh.isFreshWallet;
+        h.isInsider     = !!sh.isInsider;
+      }
+    }
 
     // Step 4: Score
     const analysisResult = analyze(tokenData);
