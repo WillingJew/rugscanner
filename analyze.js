@@ -207,54 +207,21 @@ function analyze(tokenData) {
   //   - fresh-wallet icon (Padre's leaf marker)
   //   - insider icon (Padre's ghost marker)
   //
-  // Severity by run length: 4-5 = low (+5), 6 = medium (+12), 7+ = critical (+30).
-  // Override: if the cluster's combined % > 8 it becomes critical (+40) and adds noBuy,
+  // Per-run severity: 4-5 = low (+5), 6 = medium (+12), 7+ = critical (+30).
+  // Override: if a run's combined % > 8 it becomes critical (+40) and adds noBuy,
   // regardless of length — that much supply concentrated in one icon group is a real risk.
+  //
+  // Multiple runs of the same icon label (e.g. two separate stretches of consecutive
+  // Axiom wallets) are merged into a single flag so the UI doesn't show duplicate
+  // entries. Severity = worst run's severity. Points = sum of all runs' points.
   const orderedReal = [...real].sort((a, b) => a.rank - b.rank);
 
-  function flagIconRun(label, run) {
-    const count = run.length;
-    const totalPct = run.reduce((s, h) => s + (h.percentage || 0), 0);
-    const ranks = `${run[0].rank}-${run[run.length - 1].rank}`;
-    const pctLabel = `${totalPct.toFixed(1)}% combined`;
-
-    if (totalPct > 8) {
-      flag(
-        `${count} consecutive ${label} wallets — ${pctLabel}`,
-        'critical',
-        `Ranks ${ranks} — cluster controls more than 8% of supply`
-      );
-      noBuy.push(`${count} consecutive ${label} wallets control ${totalPct.toFixed(1)}%`);
-      score += 40;
-    } else if (count >= 7) {
-      flag(
-        `${count} consecutive ${label} wallets — ${pctLabel}`,
-        'critical',
-        `Ranks ${ranks}`
-      );
-      noBuy.push(`${count} consecutive ${label} wallets at ranks ${ranks}`);
-      score += 30;
-    } else if (count === 6) {
-      flag(
-        `${count} consecutive ${label} wallets — ${pctLabel}`,
-        'medium',
-        `Ranks ${ranks}`
-      );
-      score += 12;
-    } else {
-      // 4 or 5
-      flag(
-        `${count} consecutive ${label} wallets — ${pctLabel}`,
-        'low',
-        `Ranks ${ranks}`
-      );
-      score += 5;
-    }
-  }
+  // label → array of runs (each run is an array of consecutive holders)
+  const iconRunsByLabel = Object.create(null);
 
   // scanIconRuns: walks orderedReal looking for runs where matchFn(holder) is truthy
   // AND each consecutive pair satisfies sameAs() AND ranks are strictly adjacent.
-  // When a run of >=4 ends, calls flagIconRun with a label derived from the first holder.
+  // When a run of >=4 ends, stores it in iconRunsByLabel under the labelFn() key.
   function scanIconRuns(matchFn, sameAs, labelFn) {
     let i = 0;
     while (i < orderedReal.length) {
@@ -269,7 +236,11 @@ function analyze(tokenData) {
         j++;
       }
       const run = orderedReal.slice(i, j);
-      if (run.length >= 4) flagIconRun(labelFn(orderedReal[i]), run);
+      if (run.length >= 4) {
+        const label = labelFn(orderedReal[i]);
+        if (!iconRunsByLabel[label]) iconRunsByLabel[label] = [];
+        iconRunsByLabel[label].push(run);
+      }
       i = j;
     }
   }
@@ -302,6 +273,55 @@ function analyze(tokenData) {
     () => true,
     () => 'insider'
   );
+
+  // Emit one flag per icon label, merging multiple runs of the same icon type
+  // into a single message so the UI doesn't show duplicate "X consecutive Axiom..." rows.
+  const SEV_RANK = { low: 1, medium: 2, high: 3, critical: 4 };
+  function classifyRun(run) {
+    const count = run.length;
+    const pct = run.reduce((s, h) => s + (h.percentage || 0), 0);
+    if (pct > 8)        return { severity: 'critical', points: 40, noBuy: true,  pct };
+    if (count >= 7)     return { severity: 'critical', points: 30, noBuy: true,  pct };
+    if (count === 6)    return { severity: 'medium',   points: 12, noBuy: false, pct };
+    return                     { severity: 'low',      points: 5,  noBuy: false, pct };
+  }
+
+  for (const [label, runs] of Object.entries(iconRunsByLabel)) {
+    const classified = runs.map(r => ({ run: r, ...classifyRun(r) }));
+    const totalCount  = runs.reduce((s, r) => s + r.length, 0);
+    const totalPct    = classified.reduce((s, c) => s + c.pct, 0);
+    const ranges      = runs.map(r => `${r[0].rank}-${r[r.length - 1].rank}`).join(', ');
+    const worstSev    = classified.reduce(
+      (worst, c) => (SEV_RANK[c.severity] > SEV_RANK[worst] ? c.severity : worst),
+      'low'
+    );
+    const totalPoints = classified.reduce((s, c) => s + c.points, 0);
+    const anyNoBuy    = classified.some(c => c.noBuy);
+    const overEight   = classified.some(c => c.pct > 8);
+
+    let text, detail;
+    if (runs.length === 1) {
+      text   = `${totalCount} consecutive ${label} wallets — ${totalPct.toFixed(1)}% combined`;
+      detail = overEight
+        ? `Ranks ${ranges} — cluster controls more than 8% of supply`
+        : `Ranks ${ranges}`;
+    } else {
+      text   = `${totalCount} ${label} wallets across ${runs.length} consecutive groups — ${totalPct.toFixed(1)}% combined`;
+      detail = overEight
+        ? `Ranks ${ranges} — at least one cluster controls more than 8%`
+        : `Ranks ${ranges}`;
+    }
+
+    flag(text, worstSev, detail);
+    if (anyNoBuy) {
+      noBuy.push(
+        runs.length === 1
+          ? `${totalCount} consecutive ${label} wallets at ranks ${ranges}`
+          : `${totalCount} ${label} wallets in ${runs.length} consecutive groups (ranks ${ranges})`
+      );
+    }
+    score += totalPoints;
+  }
 
   // ── 6b. WALLET BIRTH TIME CLUSTERING ─────────────────────────────────────
   // If many holders' wallets were created within the same 5-minute window = coordinated
