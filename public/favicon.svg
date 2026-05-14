@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    RugScanner Pro logo v4 - sniper scope reticle.
+    Rebuilt from Jack's sketch. Dark vignette tile, mint-green magnifying
+    glass with cardinal-point gaps where the black crosshair cuts through,
+    full-canvas crosshair with rangefinding tick marks, rectangular handle,
+    red target dot. Everything is mathematically centred and symmetric.
+  -->
+  <defs>
+    <!-- Radial vignette: lighter dark gray at centre, near-black at corners.
+         Recreates the scope-porthole feel from the source sketch. -->
+    <radialGradient id="bg" cx="50%" cy="50%" r="70%">
+      <stop offset="0%"   stop-color="#2a2a2e"/>
+      <stop offset="100%" stop-color="#08080a"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Rounded square background tile -->
+  <rect width="1024" height="1024" rx="240" fill="url(#bg)"/>
+
+  <!-- Magnifying glass body (full ring + handle).
+       Drawn BEFORE the crosshair so the crosshair naturally creates
+       the four cardinal-point gaps in the ring just by overlaying. -->
+  <g fill="none" stroke="#a8f5b8" stroke-linecap="square">
+    <circle cx="512" cy="512" r="250" stroke-width="55"/>
+    <line   x1="700" y1="700" x2="885" y2="885" stroke-width="55"/>
+  </g>
+
+  <!-- Crosshair: black full-canvas horizontal + vertical lines.
+       These overlay the ring at top/right/bottom/left, producing the
+       four breaks in the green ring you drew. -->
+  <g stroke="#000000" stroke-width="40" stroke-linecap="butt">
+    <line x1="60"  y1="512" x2="964" y2="512"/>
+    <line x1="512" y1="60"  x2="512" y2="964"/>
+  </g>
+
+  <!-- Rangefinding tick marks along the crosshair.
+       3 ticks inside the lens + 2 ticks outside, mirrored on all 4 sides.
+       Inside spacing: 65px increments. Outside ticks: at radius 330 and 395.
+       Tick length 48 (24 either side of main crosshair). -->
+  <g stroke="#000000" stroke-width="18" stroke-linecap="square">
+    <!-- Horizontal crosshair → vertical tick strokes -->
+    <!-- Right of centre, inside lens (offsets +65, +130, +195) -->
+    <line x1="577" y1="488" x2="577" y2="536"/>
+    <line x1="642" y1="488" x2="642" y2="536"/>
+    <line x1="707" y1="488" x2="707" y2="536"/>
+    <!-- Right of centre, outside lens (offsets +330, +395) -->
+    <line x1="842" y1="488" x2="842" y2="536"/>
+    <line x1="907" y1="488" x2="907" y2="536"/>
+    <!-- Left of centre, inside lens -->
+    <line x1="447" y1="488" x2="447" y2="536"/>
+    <line x1="382" y1="488" x2="382" y2="536"/>
+    <line x1="317" y1="488" x2="317" y2="536"/>
+    <!-- Left of centre, outside lens -->
+    <line x1="182" y1="488" x2="182" y2="536"/>
+    <line x1="117" y1="488" x2="117" y2="536"/>
+
+    <!-- Vertical crosshair → horizontal tick strokes -->
+    <!-- Below centre, inside lens -->
+    <line x1="488" y1="577" x2="536" y2="577"/>
+    <line x1="488" y1="642" x2="536" y2="642"/>
+    <line x1="488" y1="707" x2="536" y2="707"/>
+    <!-- Below centre, outside lens -->
+    <line x1="488" y1="842" x2="536" y2="842"/>
+    <line x1="488" y1="907" x2="536" y2="907"/>
+    <!-- Above centre, inside lens -->
+    <line x1="488" y1="447" x2="536" y2="447"/>
+    <line x1="488" y1="382" x2="536" y2="382"/>
+    <line x1="488" y1="317" x2="536" y2="317"/>
+    <!-- Above centre, outside lens -->
+    <line x1="488" y1="182" x2="536" y2="182"/>
+    <line x1="488" y1="117" x2="536" y2="117"/>
+  </g>
+
+  <!-- Red target dot dead centre -->
+  <circle cx="512" cy="512" r="22" fill="#ff2222"/>
+</svg>
