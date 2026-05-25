@@ -6,9 +6,13 @@ create table if not exists users (
   password_hash text not null,
   stripe_customer_id text unique,
   stripe_subscription_status text default 'inactive',
+  scan_count integer not null default 0,
   created_at timestamptz default now()
 );
 
 -- Index for fast email lookups
 create index if not exists users_email_idx on users(email);
 create index if not exists users_stripe_customer_idx on users(stripe_customer_id);
+
+-- Migration for existing databases (idempotent — safe to re-run):
+alter table users add column if not exists scan_count integer not null default 0;

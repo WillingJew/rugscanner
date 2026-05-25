@@ -5,7 +5,14 @@
 const { analyzeToken, enrichWithFunders } = require('./helius');
 const { analyze } = require('./analyze');
 const Anthropic = require('@anthropic-ai/sdk');
+const { createClient } = require('@supabase/supabase-js');
 const anthropic = new Anthropic();
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+
+// Free-tier scan quota. Non-PRO users get this many scans before being paywalled.
+// Lifetime, not monthly. PRO users skip the check entirely; their scan_count never
+// increments, so if they later cancel they pick up where their free count left off.
+const FREE_SCAN_LIMIT = 5;
 
 async function generateVerdict(analysisResult, holderCount) {
   const { score, flags, noBuy, deathTrap, stats } = analysisResult;
@@ -48,7 +55,30 @@ async function analyzeScrapedRoute(req, res) {
 
   if (!ca) return res.status(400).json({ error: 'Missing token CA' });
 
-  console.log(`[AnalyzeScrape] CA: ${ca} | LP addr: ${lpAddress || 'none'} | LP rank: ${lpRank ?? 'none'} | mode: ${mode}`);
+  // ── QUOTA CHECK ────────────────────────────────────────────────────────────
+  // Look up subscription status and scan count. PRO users skip this gate;
+  // free users get blocked at FREE_SCAN_LIMIT and are pushed to the upgrade flow.
+  // The error message intentionally contains "PRO" so sidebar.js's existing
+  // upgrade-prompt handler catches it without needing a frontend change.
+  const { data: user } = await supabase
+    .from('users')
+    .select('stripe_subscription_status, scan_count')
+    .eq('id', req.userId)
+    .single();
+
+  if (!user) return res.status(401).json({ error: 'User not found' });
+
+  const isPro = user.stripe_subscription_status === 'active';
+  const usedScans = user.scan_count ?? 0;
+
+  if (!isPro && usedScans >= FREE_SCAN_LIMIT) {
+    return res.status(402).json({
+      code: 'quota_exceeded',
+      error: `Free scan limit reached (${FREE_SCAN_LIMIT}/${FREE_SCAN_LIMIT}). Upgrade to PRO for unlimited scans.`,
+    });
+  }
+
+  console.log(`[AnalyzeScrape] CA: ${ca} | LP addr: ${lpAddress || 'none'} | LP rank: ${lpRank ?? 'none'} | mode: ${mode} | scans: ${usedScans}/${isPro ? '∞' : FREE_SCAN_LIMIT}`);
 
   try {
     // Step 1: Helius — real holder data
@@ -120,6 +150,20 @@ async function analyzeScrapedRoute(req, res) {
       }
     }
 
+    // Increment scan_count for non-PRO users only. PRO users have unlimited scans
+    // and we don't want their count drifting — that way if they ever cancel, the
+    // residual count reflects only free-tier usage. Fire-and-forget; a failure
+    // here shouldn't block the response the user already paid (in time) to get.
+    if (!isPro) {
+      supabase
+        .from('users')
+        .update({ scan_count: usedScans + 1 })
+        .eq('id', req.userId)
+        .then(({ error }) => {
+          if (error) console.error('[AnalyzeScrape] scan_count update failed:', error.message);
+        });
+    }
+
     return res.json({
       ca,
       lpAddress: lpAddress || null,
@@ -131,6 +175,8 @@ async function analyzeScrapedRoute(req, res) {
       stats: analysisResult.stats,
       holderCount: tokenData.holderCount,
       verdict,
+      scansUsed: isPro ? null : usedScans + 1,
+      scansLimit: isPro ? null : FREE_SCAN_LIMIT,
     });
 
   } catch (err) {
