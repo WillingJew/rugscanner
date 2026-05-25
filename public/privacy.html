@@ -141,6 +141,35 @@
       color: var(--muted2);
     }
     .callout strong { color: var(--text); }
+
+    /* Data sharing table */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 24px 0;
+      font-size: 13px;
+    }
+    .data-table th {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      text-align: left;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .data-table td {
+      color: var(--muted2);
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+      line-height: 1.5;
+    }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table td:first-child { color: var(--text); font-weight: 500; white-space: nowrap; }
+    .data-table tr:hover td { background: var(--bg2); }
+
     footer {
       border-top: 1px solid var(--border);
       padding: 32px 48px;
@@ -154,6 +183,8 @@
       nav { padding: 16px 20px; }
       main { padding: 48px 20px 80px; }
       footer { padding: 24px 20px; }
+      .data-table { font-size: 12px; }
+      .data-table td, .data-table th { padding: 8px 10px; }
     }
   </style>
 </head>
@@ -167,14 +198,14 @@
 <main>
   <div class="eyebrow">Legal</div>
   <h1>PRIVACY POLICY</h1>
-  <div class="updated">Last updated: April 18, 2026</div>
+  <div class="updated">Last updated: May 19, 2026</div>
 
   <div class="callout">
-    <strong>The short version:</strong> We collect your email to run your account and your payment info through Stripe to process subscriptions. We don't sell your data, we don't track your trading activity, and we don't store a history of the tokens you scan.
+    <strong>The short version:</strong> We collect your email to run your account and process subscriptions through Stripe. When you run a scan, publicly visible holder data from trade.padre.gg is sent to our backend and to Helius (on-chain data) and Anthropic (AI verdict). We don't sell your data, track your trading activity, or store a history of the tokens you scan.
   </div>
 
   <h2>1. Who we are</h2>
-  <p>RugScanner Pro ("we", "us", "the extension") is a Chrome browser extension that analyzes Solana token holder distributions on trade.padre.gg to help users detect rug pull patterns. This policy explains what data we collect, how we use it, and what we don't do with it.</p>
+  <p>RugScanner Pro ("we", "us", "the extension") is a Chrome browser extension that analyzes Solana token holder distributions on trade.padre.gg to help users detect rug pull patterns. This policy explains what data we collect, how we use it, how we share it, and what we don't do with it.</p>
   <p>If you have questions about this policy, contact us at <a href="mailto:support@rugscannerpro.com">support@rugscannerpro.com</a>.</p>
 
   <h2>2. What we collect</h2>
@@ -190,20 +221,30 @@
   <h3>Subscription information</h3>
   <p>If you subscribe to the paid tier, payment is processed by <strong>Stripe</strong>. We never see or store your credit card details — Stripe handles all payment data directly. We only receive and store your subscription status (active, canceled, past due) so we know whether to grant unlimited scans.</p>
 
-  <h3>Scan activity</h3>
-  <p>When you run a scan, the extension reads the publicly visible holder list shown on trade.padre.gg and sends that data to our backend for analysis. The backend returns a risk score and flags.</p>
-  <p><strong>We do not store a history of the tokens you scan.</strong> We do not log which contract addresses you've looked at. We track your total scan count only to the extent needed to enforce the 5-scan free tier limit.</p>
+  <h3>Scan data</h3>
+  <p>When you run a scan, the extension reads the publicly visible holder list displayed on the trade.padre.gg tab you have open — specifically wallet addresses, balance figures, and ranking data as shown on that page. This data is sent to our backend server for analysis.</p>
+  <p>From the backend, wallet addresses and token contract addresses are forwarded to <strong>Helius</strong> to retrieve additional on-chain data (such as funder wallet history) needed for rug pull detection. If you are on the AI tier, anonymized holder distribution data is also sent to <strong>Anthropic</strong> to generate a plain-language risk verdict.</p>
+  <p><strong>We do not store a history of the tokens you scan.</strong> We do not log which contract addresses you have personally looked at. We track your total scan count only to enforce the 5-scan free tier limit.</p>
+
+  <h3>Local storage</h3>
+  <p>The extension stores the following data locally in your browser using Chrome's storage API:</p>
+  <ul>
+    <li>Your authentication session token, so you stay signed in between sessions</li>
+    <li>Your subscription status, cached locally to avoid a network request on every page load</li>
+    <li>Your remaining free scan count, cached locally to enforce the free tier without a backend round-trip on every scan</li>
+  </ul>
+  <p>No scan history, token addresses, or wallet addresses are stored locally.</p>
 
   <h3>Technical information</h3>
-  <p>Standard server logs (IP address, request timestamps, error traces) are generated by our hosting provider for security, abuse prevention, and debugging. These are retained for a short period and are not used to build a profile of your activity.</p>
+  <p>Standard server logs (IP address, request timestamps, error traces) are generated by our hosting provider (Railway) for security, abuse prevention, and debugging. These are retained for a short period and are not used to build a profile of your activity.</p>
 
   <h2>3. What we don't collect</h2>
   <ul>
     <li>Your Solana wallet address or private keys — we never ask for either</li>
     <li>Your trades, positions, or portfolio on trade.padre.gg or anywhere else</li>
-    <li>Your browsing history or activity on other websites</li>
+    <li>Your browsing history or activity on any website other than trade.padre.gg</li>
     <li>Your credit card or banking details</li>
-    <li>A log of which tokens you've personally scanned</li>
+    <li>A persistent log of which tokens you have personally scanned</li>
   </ul>
 
   <h2>4. How we use what we collect</h2>
@@ -211,45 +252,97 @@
   <ul>
     <li>Running your account and signing you in</li>
     <li>Processing your subscription and enforcing your plan's scan limits</li>
+    <li>Performing rug pull analysis on the token holder data you request a scan for</li>
     <li>Sending transactional email (account confirmations, password resets, billing notices) via Resend</li>
     <li>Keeping the service running, debugging issues, and preventing abuse</li>
   </ul>
   <p>We do not use your data for advertising, and we do not sell or rent it to anyone.</p>
 
-  <h2>5. Third-party services</h2>
-  <p>RugScanner Pro relies on a small number of third-party providers to operate:</p>
-  <ul>
-    <li><strong>Supabase</strong> — authentication and account storage</li>
-    <li><strong>Stripe</strong> — payment processing</li>
-    <li><strong>Resend</strong> — transactional email</li>
-    <li><strong>Railway</strong> — backend hosting</li>
-    <li><strong>Helius</strong> — on-chain Solana data used to analyze holder distributions</li>
-    <li><strong>Anthropic</strong> — AI-powered verdict generation (when the AI tier is used)</li>
-  </ul>
-  <p>Each of these providers has their own privacy policy. We only share the minimum data needed for each service to do its job (for example, Stripe receives your payment info but not your scan activity; Helius receives token addresses but not your email).</p>
+  <h2>5. How we share your data</h2>
+  <p>We share the minimum data necessary with each third-party provider. The table below describes exactly what is shared with whom and why.</p>
 
-  <h2>6. Permissions the extension uses</h2>
-  <p>RugScanner Pro requests the minimum browser permissions needed to function:</p>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Provider</th>
+        <th>Data shared</th>
+        <th>Purpose</th>
+        <th>Privacy policy</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Supabase</td>
+        <td>Email address, hashed password, subscription status</td>
+        <td>Authentication and account storage</td>
+        <td><a href="https://supabase.com/privacy" target="_blank" rel="noopener">supabase.com/privacy</a></td>
+      </tr>
+      <tr>
+        <td>Stripe</td>
+        <td>Payment details (handled entirely by Stripe — we never see your card number)</td>
+        <td>Subscription billing</td>
+        <td><a href="https://stripe.com/privacy" target="_blank" rel="noopener">stripe.com/privacy</a></td>
+      </tr>
+      <tr>
+        <td>Helius</td>
+        <td>Solana token contract addresses and wallet addresses from the scanned holder list</td>
+        <td>Retrieving on-chain data (funder history, transaction records) for rug pull analysis</td>
+        <td><a href="https://www.helius.dev/privacy-policy" target="_blank" rel="noopener">helius.dev/privacy-policy</a></td>
+      </tr>
+      <tr>
+        <td>Anthropic</td>
+        <td>Anonymized holder distribution data and risk flag summary for the scanned token (AI tier only)</td>
+        <td>Generating a plain-language AI risk verdict</td>
+        <td><a href="https://www.anthropic.com/privacy" target="_blank" rel="noopener">anthropic.com/privacy</a></td>
+      </tr>
+      <tr>
+        <td>Resend</td>
+        <td>Your email address</td>
+        <td>Transactional email delivery (confirmations, password resets, billing notices)</td>
+        <td><a href="https://resend.com/privacy" target="_blank" rel="noopener">resend.com/privacy</a></td>
+      </tr>
+      <tr>
+        <td>Railway</td>
+        <td>Server logs (IP address, request timestamps, error traces)</td>
+        <td>Backend hosting and infrastructure</td>
+        <td><a href="https://railway.app/legal/privacy" target="_blank" rel="noopener">railway.app/legal/privacy</a></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>We do not share your data with any other party unless required by law.</p>
+
+  <h2>6. Browser permissions the extension uses</h2>
+  <p>RugScanner Pro requests the following Chrome extension permissions. Each is required for a specific, documented purpose:</p>
   <ul>
-    <li><strong>Access to trade.padre.gg</strong> — required to read the holder list on the page you're viewing. The extension only activates on this domain.</li>
-    <li><strong>Storage</strong> — required to keep you signed in between sessions and cache your subscription status locally.</li>
+    <li><strong>activeTab</strong> — Required to read the visible holder list on the trade.padre.gg tab you are currently viewing. When you click Scan, the extension accesses the DOM of that specific tab to extract the publicly displayed wallet addresses and balances needed for rug pull analysis. No other tabs are accessed.</li>
+    <li><strong>scripting</strong> — Required to inject the content script that reads the holder list from trade.padre.gg. The script parses visible holder data (rank, wallet address, balance, funder information) so the extension can analyze it for rug pull patterns. Scripting is only used on trade.padre.gg.</li>
+    <li><strong>storage</strong> — Required to persist your authentication session and subscription status locally so you don't have to sign in on every scan. Your remaining free scan count is also cached locally to enforce the 5-scan free tier without a network request before each scan. No scan history or token addresses are stored.</li>
+    <li><strong>sidePanel</strong> — Required because the extension's entire user interface lives in the Chrome side panel. You open the side panel next to your trade.padre.gg window to see scan results, risk scores, flags, and verdicts without leaving your trading workflow.</li>
+    <li><strong>tabs</strong> — Required to detect when you navigate between tokens on trade.padre.gg so the extension can update the side panel to reflect the token you are currently viewing. The extension reads only the URL of active trade.padre.gg tabs to extract the Solana contract address. No other tab information is accessed.</li>
+    <li><strong>Host permission: trade.padre.gg</strong> — The extension is granted access to trade.padre.gg because that is the only site it operates on. It reads the holder list from the page's DOM to perform rug pull analysis. The extension does not access any other website, does not read cross-site data, and does not modify the trade.padre.gg page.</li>
   </ul>
-  <p>The extension does not read, modify, or collect data from any other website you visit.</p>
 
   <h2>7. Data security</h2>
-  <p>Passwords are hashed and salted. Connections between the extension, our backend, and all third-party providers are encrypted over HTTPS. We follow reasonable technical and organizational measures to protect your data, though no system can guarantee absolute security.</p>
+  <p>Passwords are hashed and salted. All connections between the extension, our backend, and third-party providers are encrypted over HTTPS. We follow reasonable technical and organizational measures to protect your data, though no system can guarantee absolute security.</p>
 
   <h2>8. Data retention</h2>
-  <p>We keep your account data for as long as your account is active. If you delete your account, we remove your email and account record from our systems within 30 days. Stripe retains a record of completed transactions as required by law — this is outside our control.</p>
+  <p>We retain your data as follows:</p>
+  <ul>
+    <li><strong>Account data (email, hashed password, subscription status)</strong> — retained while your account is active. Deleted within 30 days of an account deletion request.</li>
+    <li><strong>Scan data</strong> — not retained. Holder data sent during a scan is processed in memory and not written to a database.</li>
+    <li><strong>Server logs</strong> — retained for a short rolling period (typically 30 days) for security and debugging, then purged.</li>
+    <li><strong>Stripe transaction records</strong> — Stripe retains records of completed transactions as required by financial regulations. This is outside our control; see Stripe's privacy policy for details.</li>
+  </ul>
 
   <h2>9. Your rights</h2>
-  <p>You can request to access, correct, or delete your personal data at any time by emailing <a href="mailto:support@rugscannerpro.com">support@rugscannerpro.com</a>. Depending on where you live, you may have additional rights under laws such as the GDPR (EU) or CCPA (California) — we'll honor those requests regardless of where you're located.</p>
+  <p>You can request to access, correct, or delete your personal data at any time by emailing <a href="mailto:support@rugscannerpro.com">support@rugscannerpro.com</a>. Depending on where you live, you may have additional rights under laws such as the GDPR (EU) or CCPA (California) — we will honor those requests regardless of where you are located.</p>
 
   <h2>10. Children</h2>
-  <p>RugScanner Pro is not directed at anyone under 18. We do not knowingly collect data from minors. If you believe a minor has created an account, contact us and we'll remove it.</p>
+  <p>RugScanner Pro is not directed at anyone under 18. We do not knowingly collect data from minors. If you believe a minor has created an account, contact us and we will remove it.</p>
 
   <h2>11. Changes to this policy</h2>
-  <p>If we change this policy materially, we'll update the "Last updated" date at the top and, for significant changes, notify active users by email. Continued use of the extension after a change means you accept the updated policy.</p>
+  <p>If we change this policy materially, we will update the "Last updated" date at the top and, for significant changes, notify active users by email. Continued use of the extension after a change means you accept the updated policy.</p>
 
   <h2>12. Contact</h2>
   <p>Questions, concerns, data requests, or anything else — email <a href="mailto:support@rugscannerpro.com">support@rugscannerpro.com</a>.</p>
